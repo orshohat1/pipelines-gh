@@ -2,6 +2,7 @@ import { useState } from "react";
 import { ArrowRight, GitBranch, RefreshCw, Zap } from "lucide-react";
 import BYOKConfigPanel from "./components/BYOKConfig";
 import FileUpload from "./components/FileUpload";
+import AgentActivityPanel from "./components/AgentActivityPanel";
 import PipelineStatus from "./components/PipelineStatus";
 import QuestionModal from "./components/QuestionModal";
 import PlanApprovalModal from "./components/PlanApprovalModal";
@@ -24,7 +25,7 @@ export default function App() {
   const [uploading, setUploading] = useState(false);
   const [viewingYaml, setViewingYaml] = useState<PipelineFile | null>(null);
 
-  const { files, pendingQuestion, pendingApproval, pendingTemplateRequest, connected, answerQuestion, approvePlan, submitTemplates } =
+  const { files, pendingQuestion, pendingApproval, pendingTemplateRequest, activeAgents, connected, answerQuestion, approvePlan, submitTemplates } =
     useWebSocket(jobId);
 
   const handleUpload = async (selectedFiles: File[]) => {
@@ -209,6 +210,9 @@ export default function App() {
                 <p className="text-sm text-gray-500">Initializing migration...</p>
               </div>
             )}
+
+            {/* Agent activity visualization */}
+            <AgentActivityPanel agents={activeAgents} />
 
             <div className="space-y-3">
               {fileList.map((f) => (

@@ -205,6 +205,8 @@ async def _evaluate_yaml(
     plan: MigrationPlan,
     iteration: int,
     byok: BYOKProviderConfig | None,
+    on_agent_activity: callable | None = None,
+    target_name: str = "",
 ) -> EvalResult:
     """Evaluate generated YAML against the quality rubric + actionlint."""
     model = byok.model_name if byok else "openai/gpt-5.4-mini"
@@ -219,6 +221,8 @@ async def _evaluate_yaml(
         session_opts["provider"] = provider
 
     # Run actionlint concurrently with LLM evaluation
+    if on_agent_activity:
+        await on_agent_activity("actionlint", "running", f"Linting {target_name}", target_name)
     lint_task = asyncio.get_event_loop().run_in_executor(None, run_actionlint, yaml_content)
 
     session = await client.create_session(session_opts)
@@ -257,6 +261,8 @@ async def _evaluate_yaml(
 
     # Get actionlint results
     lint_passed, lint_output = await lint_task
+    if on_agent_activity:
+        await on_agent_activity("actionlint", "completed", "Passed" if lint_passed else "Issues found", target_name)
 
     dimensions = [
         EvalDimension(
@@ -358,6 +364,7 @@ async def generate_workflow(
     byok: BYOKProviderConfig | None = None,
     on_eval_update: callable | None = None,
     target_file: OutputFileSpec | None = None,
+    on_agent_activity: callable | None = None,
 ) -> tuple[str, list[EvalResult]]:
     """Generate GitHub Actions YAML with evaluator-optimizer loop.
 
@@ -372,15 +379,27 @@ async def generate_workflow(
         byok: Optional BYOK config.
         on_eval_update: Optional callback(eval_result) for progress reporting.
         target_file: Optional specific file to generate (for parallel multi-file).
+        on_agent_activity: Optional callback for real-time agent visualization.
 
     Returns:
         (final_yaml, list_of_eval_results)
     """
+    target_name = target_file.filename if target_file else (plan.workflow_name or "workflow")
+
+    if on_agent_activity:
+        await on_agent_activity("generator", "running", f"Generating {target_name}", target_name)
     yaml_content = await _generate_yaml(client, plan, source_content, pipeline_type, byok, target_file)
+    if on_agent_activity:
+        await on_agent_activity("generator", "completed", f"Generated {target_name}", target_name)
+
     eval_results: list[EvalResult] = []
 
     for iteration in range(MAX_ITERATIONS):
-        eval_result = await _evaluate_yaml(client, yaml_content, plan, iteration, byok)
+        if on_agent_activity:
+            await on_agent_activity("evaluator", "running", f"Evaluating {target_name} (round {iteration + 1})", target_name)
+        eval_result = await _evaluate_yaml(client, yaml_content, plan, iteration, byok, on_agent_activity, target_name)
+        if on_agent_activity:
+            await on_agent_activity("evaluator", "completed", f"Score: {eval_result.overall_score:.0%}", target_name)
         eval_results.append(eval_result)
 
         if on_eval_update:
@@ -398,7 +417,11 @@ async def generate_workflow(
                 iteration,
                 eval_result.overall_score,
             )
+            if on_agent_activity:
+                await on_agent_activity("refiner", "running", f"Refining {target_name}", target_name)
             yaml_content = await _refine_yaml(client, yaml_content, eval_result, byok)
+            if on_agent_activity:
+                await on_agent_activity("refiner", "completed", f"Refined {target_name}", target_name)
 
     return yaml_content, eval_results
 
@@ -487,6 +510,7 @@ async def generate_workflows_parallel(
     pipeline_type: PipelineType,
     byok: BYOKProviderConfig | None = None,
     on_progress: callable | None = None,
+    on_agent_activity: callable | None = None,
 ) -> tuple[list[GeneratedFile], list[EvalResult]]:
     """Generate multiple workflow files in parallel, then merge for consistency.
 
@@ -520,6 +544,7 @@ async def generate_workflows_parallel(
         yaml, evals = await generate_workflow(
             client, plan, source_content, pipeline_type, byok,
             target_file=file_spec,
+            on_agent_activity=on_agent_activity,
         )
         return GeneratedFile(
             filename=file_spec.filename,
@@ -534,9 +559,14 @@ async def generate_workflows_parallel(
     all_evals = [e for r in results for e in r[1]]
 
     # Merge pass for cross-file consistency
+    if on_agent_activity:
+        await on_agent_activity("merge", "running", f"Merging {len(all_files)} files for consistency", "")
     if on_progress:
         await on_progress(f"Merging {len(all_files)} files for consistency...")
 
     all_files = await _merge_files(client, all_files, plan, byok)
+
+    if on_agent_activity:
+        await on_agent_activity("merge", "completed", "Cross-file consistency verified", "")
 
     return all_files, all_evals

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type {
+  AgentActivity,
   GeneratedFile,
   HumanQuestion,
   PipelineFile,
@@ -17,6 +18,8 @@ interface UseWebSocketReturn {
   pendingApproval: PlanApprovalRequest | null;
   /** Currently pending template request, if any. */
   pendingTemplateRequest: TemplateRequestMsg | null;
+  /** Active agent activity map (agent_id → AgentActivity). */
+  activeAgents: Map<string, AgentActivity>;
   /** Send an answer to a HITL question. */
   answerQuestion: (questionId: string, answer: string) => void;
   /** Send a plan approval response. */
@@ -33,6 +36,8 @@ export function useWebSocket(jobId: string | null): UseWebSocketReturn {
   const [pendingQuestion, setPendingQuestion] = useState<HumanQuestion | null>(null);
   const [pendingApproval, setPendingApproval] = useState<PlanApprovalRequest | null>(null);
   const [pendingTemplateRequest, setPendingTemplateRequest] = useState<TemplateRequestMsg | null>(null);
+  const [activeAgents, setActiveAgents] = useState<Map<string, AgentActivity>>(new Map());
+  const agentTimersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
   const [connected, setConnected] = useState(false);
 
   useEffect(() => {
@@ -100,6 +105,49 @@ export function useWebSocket(jobId: string | null): UseWebSocketReturn {
             templates: msg.templates,
           });
           break;
+
+        case "agent_activity": {
+          const activity: AgentActivity = {
+            agent_id: msg.agent_id,
+            agent_type: msg.agent_type,
+            status: msg.status,
+            file_id: msg.file_id,
+            filename: msg.filename,
+            detail: msg.detail,
+            target_file: msg.target_file,
+          };
+
+          // Clear any removal timer when agent restarts
+          if (activity.status === "running") {
+            const existing = agentTimersRef.current.get(activity.agent_id);
+            if (existing) {
+              clearTimeout(existing);
+              agentTimersRef.current.delete(activity.agent_id);
+            }
+          }
+
+          setActiveAgents((prev) => {
+            const next = new Map(prev);
+            next.set(activity.agent_id, activity);
+            return next;
+          });
+
+          // Auto-remove completed/error agents after a short delay
+          if (activity.status === "completed" || activity.status === "error") {
+            const existing = agentTimersRef.current.get(activity.agent_id);
+            if (existing) clearTimeout(existing);
+            const timer = setTimeout(() => {
+              setActiveAgents((prev) => {
+                const next = new Map(prev);
+                next.delete(activity.agent_id);
+                return next;
+              });
+              agentTimersRef.current.delete(activity.agent_id);
+            }, activity.status === "completed" ? 2000 : 3000);
+            agentTimersRef.current.set(activity.agent_id, timer);
+          }
+          break;
+        }
       }
     };
 
@@ -107,6 +155,11 @@ export function useWebSocket(jobId: string | null): UseWebSocketReturn {
       ws.close();
       wsRef.current = null;
       setConnected(false);
+      setActiveAgents(new Map());
+      for (const timer of agentTimersRef.current.values()) {
+        clearTimeout(timer);
+      }
+      agentTimersRef.current.clear();
     };
   }, [jobId]);
 
@@ -142,6 +195,6 @@ export function useWebSocket(jobId: string | null): UseWebSocketReturn {
 
   return {
     files, pendingQuestion, pendingApproval, pendingTemplateRequest,
-    connected, answerQuestion, approvePlan, submitTemplates,
+    activeAgents, connected, answerQuestion, approvePlan, submitTemplates,
   };
 }

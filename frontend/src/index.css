@@ -72,6 +72,22 @@
   font-variant-ligatures: none;
 }
 
+/* Agent card animations */
+@keyframes agentCardEnter {
+  from {
+    opacity: 0;
+    transform: translateY(8px) scale(0.95);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.agent-card-enter {
+  animation: agentCardEnter 0.3s ease-out both;
+}
+
 /* Glass morphism */
 .glass {
   background: rgba(17, 24, 39, 0.8);

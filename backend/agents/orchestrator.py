@@ -77,13 +77,29 @@ async def _process_single_file(
         update = StageUpdate(file_id=file_id, filename=filename, stage=stage, message=message, data=data)
         await ws_manager.broadcast(job_id, update)
 
+    async def emit_agent(agent_type: str, status: str, detail: str = "", target_file: str = "") -> None:
+        agent_id = f"{agent_type}-{file_id[:8]}"
+        if target_file:
+            agent_id = f"{agent_type}-{target_file.replace('.', '-').replace('/', '-')}-{file_id[:8]}"
+        await ws_manager.broadcast_agent_activity(job_id, {
+            "agent_id": agent_id,
+            "agent_type": agent_type,
+            "status": status,
+            "file_id": file_id,
+            "filename": filename,
+            "detail": detail,
+            "target_file": target_file,
+        })
+
     # ── Stage 1: Validation ──────────────────────────────────────────────
     await emit(Stage.VALIDATING, "Detecting pipeline type...")
+    await emit_agent("validator", "running", "Detecting pipeline type...")
 
     try:
         validation = await validate_pipeline(client, filename, content, byok)
     except Exception as e:
         logger.exception("Validation failed for %s", filename)
+        await emit_agent("validator", "error", str(e))
         await emit(Stage.ERROR, f"Validation failed: {e}")
         return MigrationResult(
             file_id=file_id,
@@ -91,6 +107,8 @@ async def _process_single_file(
             source_type=PipelineType.UNKNOWN,
             error=f"Validation failed: {e}",
         )
+
+    await emit_agent("validator", "completed", f"Detected {validation.pipeline_type.value}")
 
     if validation.pipeline_type == PipelineType.UNKNOWN:
         await emit(
@@ -134,6 +152,7 @@ async def _process_single_file(
         question_id = str(uuid.uuid4())
         return await ws_manager.send_question(job_id, file_id, question_id, question, choices)
 
+    await emit_agent("planner", "running", "Generating migration plan...")
     try:
         plan = await plan_migration(
             client,
@@ -146,6 +165,7 @@ async def _process_single_file(
         )
     except Exception as e:
         logger.exception("Planning failed for %s", filename)
+        await emit_agent("planner", "error", str(e))
         await emit(Stage.ERROR, f"Planning failed: {e}")
         return MigrationResult(
             file_id=file_id,
@@ -154,6 +174,7 @@ async def _process_single_file(
             error=f"Planning failed: {e}",
         )
 
+    await emit_agent("planner", "completed", "Migration plan ready")
     plan_data = plan.model_dump()
     await emit(Stage.PLAN_READY, "Migration plan ready — awaiting approval", data=plan_data)
 
@@ -167,6 +188,7 @@ async def _process_single_file(
         if approval.revise and approval.feedback:
             # User wants to revise — re-plan with feedback
             await emit(Stage.PLANNING, f"Revising plan: {approval.feedback}")
+            await emit_agent("planner", "running", f"Revising plan: {approval.feedback}")
             try:
                 plan = await plan_migration(
                     client,
@@ -181,6 +203,7 @@ async def _process_single_file(
                 )
             except Exception as e:
                 logger.exception("Plan revision failed for %s", filename)
+                await emit_agent("planner", "error", str(e))
                 await emit(Stage.ERROR, f"Plan revision failed: {e}")
                 return MigrationResult(
                     file_id=file_id,
@@ -188,6 +211,7 @@ async def _process_single_file(
                     source_type=validation.pipeline_type,
                     error=f"Plan revision failed: {e}",
                 )
+            await emit_agent("planner", "completed", "Revised plan ready")
             plan_data = plan.model_dump()
             await emit(Stage.PLAN_READY, "Revised plan ready — awaiting approval", data=plan_data)
             continue
@@ -222,6 +246,9 @@ async def _process_single_file(
             data=eval_result.model_dump(),
         )
 
+    async def agent_activity_cb(agent_type: str, status: str, detail: str = "", target_file: str = "") -> None:
+        await emit_agent(agent_type, status, detail, target_file)
+
     try:
         if use_parallel:
             # Build full source context including templates
@@ -237,6 +264,7 @@ async def _process_single_file(
                 validation.pipeline_type,
                 byok=byok,
                 on_progress=lambda msg: emit(Stage.CODING, msg),
+                on_agent_activity=agent_activity_cb,
             )
             yaml_content = generated_files[0].content if generated_files else ""
         else:
@@ -252,6 +280,7 @@ async def _process_single_file(
                 validation.pipeline_type,
                 byok,
                 on_eval_update=on_eval_update,
+                on_agent_activity=agent_activity_cb,
             )
             generated_files = [GeneratedFile(
                 filename=f"{plan.workflow_name or 'workflow'}.yml",

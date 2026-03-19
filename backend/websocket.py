@@ -55,6 +55,20 @@ class ConnectionManager:
         for ws in dead:
             self.disconnect(job_id, ws)
 
+    async def broadcast_agent_activity(self, job_id: str, activity: dict[str, Any]) -> None:
+        """Broadcast an agent activity event to all connected clients."""
+        if job_id not in self._connections:
+            return
+        message = json.dumps({"type": "agent_activity", **activity})
+        dead: list[WebSocket] = []
+        for ws in self._connections.get(job_id, []):
+            try:
+                await ws.send_text(message)
+            except Exception:
+                dead.append(ws)
+        for ws in dead:
+            self.disconnect(job_id, ws)
+
     async def send_question(
         self,
         job_id: str,

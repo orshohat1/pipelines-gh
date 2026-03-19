@@ -124,6 +124,14 @@ Eliminate long-lived credentials:
 14. Keep actions updated with Dependabot
 15. Test in forks first
 
+## Job Separation Best Practices
+
+- **Never combine build and deploy in the same job.** Build and deploy have different failure modes, permissions, and rollback needs.
+- Each logical stage (build, test, deploy, promote/tag) should be its own job connected via `needs:`.
+- If migrating a pipeline that has build+deploy in one job, **split them** — this is a migration improvement.
+- Every template reference in the source pipeline (build templates, deployment templates, infrastructure templates) must become a separate reusable workflow file with `on: workflow_call:`.
+- The main workflow calls reusable workflows with `uses: ./.github/workflows/filename.yml`.
+
 ## Pipeline Migration Mappings
 
 When migrating pipelines from other CI/CD systems, use the following mappings.

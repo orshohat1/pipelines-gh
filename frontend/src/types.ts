@@ -100,9 +100,20 @@ export interface BYOKConfig {
   wire_api: string;
 }
 
+export interface AgentActivity {
+  agent_id: string;
+  agent_type: string;
+  status: string;
+  file_id: string;
+  filename: string;
+  detail: string;
+  target_file: string;
+}
+
 /** WebSocket message received from server (discriminated by "type"). */
 export type ServerMessage =
   | ({ type: "stage_update" } & StageUpdate)
   | ({ type: "question" } & HumanQuestion)
   | ({ type: "plan_approval_request" } & PlanApprovalRequest)
-  | ({ type: "template_request" } & TemplateRequestMsg);
+  | ({ type: "template_request" } & TemplateRequestMsg)
+  | ({ type: "agent_activity" } & AgentActivity);

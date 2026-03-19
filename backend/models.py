@@ -182,3 +182,14 @@ class BYOKConfigRequest(BaseModel):
 class MigrateResponse(BaseModel):
     job_id: str
     file_count: int
+
+
+class AgentActivity(BaseModel):
+    """Real-time agent activity event for UI visualization."""
+    agent_id: str
+    agent_type: str  # validator | planner | generator | evaluator | refiner | merge | actionlint
+    status: str  # running | completed | error
+    file_id: str = ""
+    filename: str = ""
+    detail: str = ""
+    target_file: str = ""

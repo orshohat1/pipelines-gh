@@ -28,7 +28,13 @@ Security rules (apply to every workflow):
 - Sensitive credentials via `${{ secrets.NAME }}`; non-sensitive config (app names, resource groups, regions, URLs) via `${{ vars.NAME }}`
 - Prefer OIDC over long-lived creds
 - Include `concurrency` groups for deployment workflows
-- Use built-in caching and set `retention-days` on artifacts"""
+- Use built-in caching and set `retention-days` on artifacts
+
+Job separation rules:
+- NEVER combine build and deploy in the same job. Build and deploy are separate concerns with separate failure modes.
+- Each logical stage (build, test, deploy, promote, tag) should be its own job connected via `needs:`.
+- If the source pipeline has build+deploy in one job, SPLIT them — this is a migration improvement, not a 1:1 copy.
+- Template references (Azure DevOps `template:`, Jenkins shared libs, GitLab `include:`) MUST each become a separate reusable workflow file."""
 
 _JSON_SCHEMA = """\
 Always respond in English.
@@ -58,7 +64,7 @@ Do NOT use escaped quotes (\\" ) as string delimiters — use plain double quote
 }
 
 IMPORTANT:
-- "output_files" defines the set of GitHub Actions files to generate. For simple pipelines with no templates, use a single entry. When the source pipeline uses templates/includes, create a main workflow file plus separate reusable workflows for each template. The main workflow should call reusable workflows with `uses: ./.github/workflows/filename.yml`. Each entry lists which jobs it contains via "job_names".
+- "output_files" defines the set of GitHub Actions files to generate. For simple pipelines with no templates, use a single entry. When the source pipeline uses templates/includes, create a main workflow file AND a separate reusable workflow for EVERY template — including deployment/infrastructure templates, not just build templates. The main workflow should call reusable workflows with `uses: ./.github/workflows/filename.yml`. Each entry lists which jobs it contains via "job_names".
 - "prerequisites" lists things the user MUST create before the workflow can run (OIDC credentials, secrets, environments, etc.)
 - "enhancements" proposes best-practice upgrades beyond a 1:1 migration: splitting into multiple jobs, adding security scanning (CodeQL, dependency-review), artifact signing, environment protection rules, matrix builds, or anything that would make this a world-class GitHub Actions workflow. Be ambitious — propose 2-5 improvements.
 - When migrating variable groups, prefer GitHub ENVIRONMENT variables/secrets over repository-level variables for any value that is environment-specific (app names, resource groups, connection strings, etc.). Repository variables should only be used for values shared across ALL environments.
@@ -83,9 +89,10 @@ Key mappings:
   * Sensitive values (client IDs, secrets, passwords, tokens, connection strings) → `${{ secrets.NAME }}`
   * Non-sensitive config (app names, resource groups, regions, slot names, URLs) → `${{ vars.NAME }}`
   * Prefer environment-scoped over repository-level for environment-specific values
-- Template refs → reusable workflows or composite actions
+- Template refs → reusable workflows (EVERY template file becomes a reusable workflow, including deployment templates)
 - `dependsOn:` → `needs:`
 - Environments + approvals → environments + protection rules
+- Multi-step jobs (build+deploy in one job) → split into separate jobs (build job + deploy job)
 
 {_SECURITY_RULES}
 
