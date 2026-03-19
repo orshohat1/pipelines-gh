@@ -147,11 +147,11 @@ async def _generate_yaml(
 
     session = await client.create_session(session_opts)
     try:
+        plan_json = plan.model_dump_json(indent=2)
         prompt = (
-            f"Generate a complete GitHub Actions workflow YAML based on this migration plan "
-            f"and the original {pipeline_type.value} pipeline.\n\n"
-            f"## Migration Plan\n```json\n{plan.model_dump_json(indent=2)}\n```\n\n"
-            f"## Original Pipeline\n```\n{source_content}\n```"
+            f"Generate a GitHub Actions workflow for this {pipeline_type.value} pipeline "
+            f"based on the migration plan below. Output ONLY raw YAML starting with `name:`.\n\n"
+            f"Plan:\n{plan_json}\n\nOriginal pipeline:\n{source_content}"
         )
         response = await session.send_and_wait({"prompt": prompt}, timeout=180)
         raw = response.data.content if response else ""
@@ -167,7 +167,12 @@ async def _generate_yaml(
 
         return text
     finally:
+        sid = session.session_id
         await session.disconnect()
+        try:
+            await client.delete_session(sid)
+        except Exception:
+            pass
 
 
 async def _evaluate_yaml(
@@ -202,7 +207,12 @@ async def _evaluate_yaml(
         response = await session.send_and_wait({"prompt": prompt}, timeout=180)
         raw = response.data.content if response else ""
     finally:
+        sid = session.session_id
         await session.disconnect()
+        try:
+            await client.delete_session(sid)
+        except Exception:
+            pass
 
     # Parse LLM evaluation
     text = raw.strip()
@@ -299,7 +309,12 @@ async def _refine_yaml(
 
         return text
     finally:
+        sid = session.session_id
         await session.disconnect()
+        try:
+            await client.delete_session(sid)
+        except Exception:
+            pass
 
 
 # ── Public API ───────────────────────────────────────────────────────────────

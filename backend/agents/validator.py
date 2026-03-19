@@ -13,6 +13,8 @@ from backend.models import PipelineType, ValidationResult
 
 logger = logging.getLogger(__name__)
 
+PROJECT_ROOT = str(Path(__file__).resolve().parents[2])
+
 SYSTEM_MESSAGE = """You are a CI/CD pipeline file classifier. Your ONLY job is to determine
 which CI/CD platform a given pipeline file belongs to.
 
@@ -53,12 +55,11 @@ async def validate_pipeline(
     Returns a ValidationResult with the detected pipeline type.
     """
     model = byok.model_name if byok else "claude-sonnet-4.6"
-    project_root = str(Path(__file__).resolve().parents[2])
     session_opts: dict = {
         "model": model,
         "system_message": {"mode": "replace", "content": SYSTEM_MESSAGE},
         "on_permission_request": PermissionHandler.approve_all,
-        "config_dir": project_root,
+        "config_dir": PROJECT_ROOT,
     }
     provider = byok.to_sdk_provider() if byok else None
     if provider:
@@ -98,4 +99,9 @@ async def validate_pipeline(
             details=data.get("details", ""),
         )
     finally:
+        sid = session.session_id
         await session.disconnect()
+        try:
+            await client.delete_session(sid)
+        except Exception:
+            pass

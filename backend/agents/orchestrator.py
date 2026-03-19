@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import tempfile
 import uuid
 from typing import Any, Callable, Coroutine
 
@@ -196,7 +197,7 @@ async def run_migration(
     Returns:
         List of MigrationResult for each file.
     """
-    client = CopilotClient()
+    client = CopilotClient({"cwd": tempfile.mkdtemp(prefix="copilot-")})
     await client.start()
 
     semaphore = asyncio.Semaphore(settings.max_concurrent_pipelines)
