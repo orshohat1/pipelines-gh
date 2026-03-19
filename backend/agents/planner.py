@@ -43,6 +43,9 @@ Return ONLY a valid JSON object (no markdown, no fences, no extra text).
     "needs": [], "steps": [{"name":"...","uses":"...","run":"..."}],
     "environment": null, "permissions": {}
   }],
+  "output_files": [
+    {"filename": "deploy.yml", "file_type": "workflow|reusable|composite", "description": "...", "job_names": ["job-id-1"]}
+  ],
   "prerequisites": [
     {"what": "thing to create", "why": "reason it's needed", "how": "CLI command or portal step"}
   ],
@@ -53,6 +56,7 @@ Return ONLY a valid JSON object (no markdown, no fences, no extra text).
 }
 
 IMPORTANT:
+- "output_files" defines the set of GitHub Actions files to generate. For simple pipelines with no templates, use a single entry. When the source pipeline uses templates/includes, create a main workflow file plus separate reusable workflows for each template. The main workflow should call reusable workflows with `uses: ./.github/workflows/filename.yml`. Each entry lists which jobs it contains via "job_names".
 - "prerequisites" lists things the user MUST create before the workflow can run (OIDC credentials, secrets, environments, etc.)
 - "enhancements" proposes best-practice upgrades beyond a 1:1 migration: splitting into multiple jobs, adding security scanning (CodeQL, dependency-review), artifact signing, environment protection rules, matrix builds, or anything that would make this a world-class GitHub Actions workflow. Be ambitious — propose 2-5 improvements.
 - When migrating variable groups, prefer GitHub ENVIRONMENT variables/secrets over repository-level variables for any value that is environment-specific (app names, resource groups, connection strings, etc.). Repository variables should only be used for values shared across ALL environments.
@@ -155,6 +159,7 @@ async def plan_migration(
     on_user_question: Callable[..., Coroutine] | None = None,
     revision_feedback: str | None = None,
     previous_plan: dict | None = None,
+    template_contents: list[dict[str, str]] | None = None,
 ) -> MigrationPlan:
     """Generate a migration plan from a source pipeline to GitHub Actions.
 
@@ -192,6 +197,20 @@ async def plan_migration(
 
     session = await client.create_session(session_opts)
     try:
+        # Build template context if template files were provided
+        template_context = ""
+        if template_contents:
+            parts = [
+                f"### Template: {tc['path']}\n```\n{tc['content']}\n```"
+                for tc in template_contents
+            ]
+            template_context = (
+                "\n\n## Referenced Template Files\n"
+                "The user provided these template files referenced by the main pipeline. "
+                "Create a comprehensive plan that maps each template to a reusable GitHub Actions workflow.\n\n"
+                + "\n\n".join(parts)
+            )
+
         if revision_feedback and previous_plan:
             prompt = (
                 f"Revise this migration plan based on user feedback. "
@@ -199,12 +218,14 @@ async def plan_migration(
                 f"User feedback: {revision_feedback}\n\n"
                 f"Previous plan:\n{json.dumps(previous_plan, indent=2)}\n\n"
                 f"Original pipeline:\n{content}"
+                f"{template_context}"
             )
         else:
             prompt = (
                 f"Migrate this {pipeline_type.value} pipeline to GitHub Actions. "
                 f"Return ONLY valid JSON matching the schema in your instructions.\n\n"
                 f"Filename: {filename}\n\n{content}"
+                f"{template_context}"
             )
         response = await session.send_and_wait({"prompt": prompt}, timeout=180)
         raw = response.data.content if response else ""
@@ -235,6 +256,11 @@ async def plan_migration(
             description=data.get("description", ""),
             triggers=data.get("triggers", []),
             jobs=data.get("jobs", []),
+            output_files=[
+                {"filename": f.get("filename", ""), "file_type": f.get("file_type", "workflow"),
+                 "description": f.get("description", ""), "job_names": f.get("job_names", [])}
+                for f in data.get("output_files", [])
+            ],
             prerequisites=[
                 {"what": p.get("what", ""), "why": p.get("why", ""), "how": p.get("how", "")}
                 for p in data.get("prerequisites", [])

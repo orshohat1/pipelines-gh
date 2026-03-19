@@ -11,6 +11,7 @@ import {
   ClipboardList,
   MessageSquare,
   Send,
+  FileCode,
 } from "lucide-react";
 import type { PlanApprovalRequest } from "../types";
 
@@ -28,6 +29,7 @@ function buildSummary(raw: Record<string, unknown>) {
   const warnings = Array.isArray(raw.warnings) ? (raw.warnings as { severity: string; message: string }[]) : [];
   const prerequisites = Array.isArray(raw.prerequisites) ? (raw.prerequisites as { what: string; why: string; how: string }[]) : [];
   const enhancements = Array.isArray(raw.enhancements) ? (raw.enhancements as { title: string; description: string }[]) : [];
+  const outputFiles = Array.isArray(raw.output_files) ? (raw.output_files as { filename: string; file_type: string; description: string }[]) : [];
 
   const sentences: string[] = [];
 
@@ -81,12 +83,12 @@ function buildSummary(raw: Record<string, unknown>) {
     .filter(w => w.severity === "critical" || w.severity === "warning")
     .map(w => w.message);
 
-  return { title: workflowName, description, sentences, jobFlow, criticalWarnings, prerequisites, enhancements };
+  return { title: workflowName, description, sentences, jobFlow, criticalWarnings, prerequisites, enhancements, outputFiles };
 }
 
 export default function PlanApprovalModal({ approval, onApprove }: Props) {
   const raw = approval.plan;
-  const { title, description, sentences, jobFlow, criticalWarnings, prerequisites, enhancements } = buildSummary(raw);
+  const { title, description, sentences, jobFlow, criticalWarnings, prerequisites, enhancements, outputFiles } = buildSummary(raw);
   const [feedback, setFeedback] = useState("");
   const [showFeedback, setShowFeedback] = useState(false);
 
@@ -156,6 +158,27 @@ export default function PlanApprovalModal({ approval, onApprove }: Props) {
                   )}
                 </div>
               ))}
+            </div>
+          )}
+
+          {/* Output files (multi-file generation) */}
+          {outputFiles.length > 1 && (
+            <div>
+              <div className="flex items-center gap-2 mb-2.5">
+                <FileCode size={14} className="text-indigo-400" />
+                <span className="text-xs font-medium text-indigo-400">
+                  {outputFiles.length} workflow files will be generated
+                </span>
+              </div>
+              <div className="space-y-1.5">
+                {outputFiles.map((f, i) => (
+                  <div key={i} className="flex items-center gap-3 rounded-lg border border-indigo-500/15 bg-indigo-500/5 px-3.5 py-2">
+                    <code className="text-xs font-mono text-gray-300">{f.filename}</code>
+                    <span className="text-[10px] text-gray-500 bg-gray-800 px-2 py-0.5 rounded-full">{f.file_type}</span>
+                    {f.description && <span className="text-xs text-gray-500 ml-auto truncate max-w-[40%]">{f.description}</span>}
+                  </div>
+                ))}
+              </div>
             </div>
           )}
 
@@ -259,7 +282,11 @@ export default function PlanApprovalModal({ approval, onApprove }: Props) {
         <div className="flex items-center justify-between border-t border-gray-800/50 px-6 py-4">
           <div className="flex items-center gap-1.5">
             <GitBranch size={12} className="text-gray-600" />
-            <p className="text-xs text-gray-600">A YAML workflow file will be generated</p>
+            <p className="text-xs text-gray-600">
+              {outputFiles.length > 1
+                ? `${outputFiles.length} YAML workflow files will be generated`
+                : "A YAML workflow file will be generated"}
+            </p>
           </div>
           <div className="flex items-center gap-2.5">
             <button

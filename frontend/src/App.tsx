@@ -5,6 +5,7 @@ import FileUpload from "./components/FileUpload";
 import PipelineStatus from "./components/PipelineStatus";
 import QuestionModal from "./components/QuestionModal";
 import PlanApprovalModal from "./components/PlanApprovalModal";
+import TemplateRequestModal from "./components/TemplateRequestModal";
 import YAMLOutput from "./components/YAMLOutput";
 import { useWebSocket } from "./hooks/useWebSocket";
 import type { BYOKConfig, PipelineFile } from "./types";
@@ -23,7 +24,7 @@ export default function App() {
   const [uploading, setUploading] = useState(false);
   const [viewingYaml, setViewingYaml] = useState<PipelineFile | null>(null);
 
-  const { files, pendingQuestion, pendingApproval, connected, answerQuestion, approvePlan } =
+  const { files, pendingQuestion, pendingApproval, pendingTemplateRequest, connected, answerQuestion, approvePlan, submitTemplates } =
     useWebSocket(jobId);
 
   const handleUpload = async (selectedFiles: File[]) => {
@@ -245,11 +246,20 @@ export default function App() {
           <PlanApprovalModal approval={pendingApproval} onApprove={approvePlan} />
         )}
 
+        {pendingTemplateRequest && (
+          <TemplateRequestModal
+            request={pendingTemplateRequest}
+            onSubmit={submitTemplates}
+            onSkip={(fileId) => submitTemplates(fileId, [])}
+          />
+        )}
+
         {viewingYaml?.yaml && (
           <YAMLOutput
             yaml={viewingYaml.yaml}
             filename={viewingYaml.filename}
             onClose={() => setViewingYaml(null)}
+            files={viewingYaml.generatedFiles}
           />
         )}
 

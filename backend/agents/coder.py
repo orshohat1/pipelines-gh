@@ -25,7 +25,7 @@ if _GITHUB_SRC.exists() and not _GITHUB_LINK.exists():
     os.symlink(_GITHUB_SRC, _GITHUB_LINK)
 
 from backend.config import BYOKProviderConfig, settings
-from backend.models import EvalDimension, EvalResult, MigrationPlan, PipelineType
+from backend.models import EvalDimension, EvalResult, GeneratedFile, MigrationPlan, OutputFileSpec, PipelineType
 
 logger = logging.getLogger(__name__)
 
@@ -68,6 +68,21 @@ REFINER_SYSTEM = """Fix ALL issues identified in the evaluation feedback while p
 the workflow's functionality. Apply GitHub Actions best practices from your knowledge base.
 
 Output ONLY the corrected raw YAML content. No markdown fences. Start with `name:`.
+"""
+
+MERGE_SYSTEM = """You are a GitHub Actions integration specialist. You receive a set of
+independently-generated workflow files that belong to the same migration.
+
+Review them for cross-file consistency:
+- Reusable workflow `workflow_call` inputs/outputs must match the calling workflow's `uses:` and `with:`
+- Secrets must be passed correctly via `secrets: inherit` or explicit mapping
+- File paths in `uses:` must be correct (`./.github/workflows/filename.yml`)
+- Job names, environment names, and variable references must be consistent
+- All files must use the same action versions
+
+Fix any inconsistencies while preserving functionality.
+Return ONLY a valid JSON array where each element has "filename" and "content" (raw YAML):
+[{"filename": "...", "content": "name: ...\\n..."}]
 """
 
 
@@ -120,6 +135,7 @@ async def _generate_yaml(
     source_content: str,
     pipeline_type: PipelineType,
     byok: BYOKProviderConfig | None,
+    target_file: OutputFileSpec | None = None,
 ) -> str:
     """Generate initial GitHub Actions YAML from a migration plan."""
     model = byok.model_name if byok else "claude-sonnet-4.6"
@@ -136,11 +152,28 @@ async def _generate_yaml(
     session = await client.create_session(session_opts)
     try:
         plan_json = plan.model_dump_json(indent=2)
-        prompt = (
-            f"Generate a GitHub Actions workflow for this {pipeline_type.value} pipeline "
-            f"based on the migration plan below. Output ONLY raw YAML starting with `name:`.\n\n"
-            f"Plan:\n{plan_json}\n\nOriginal pipeline:\n{source_content}"
-        )
+
+        if target_file:
+            file_type_label = "reusable workflow" if target_file.file_type == "reusable" else target_file.file_type
+            jobs_hint = f"\nThis file should contain jobs: {', '.join(target_file.job_names)}." if target_file.job_names else ""
+            reusable_hint = (
+                "\nSince this is a reusable workflow, it MUST be triggered by `on: workflow_call:` "
+                "with appropriate inputs for parameters the caller needs to pass."
+                if target_file.file_type == "reusable" else ""
+            )
+            prompt = (
+                f"Generate the {file_type_label} file '{target_file.filename}' for this "
+                f"{pipeline_type.value} pipeline migration.\n"
+                f"Description: {target_file.description}{jobs_hint}{reusable_hint}\n\n"
+                f"Output ONLY raw YAML starting with `name:`.\n\n"
+                f"Full migration plan:\n{plan_json}\n\nSource files:\n{source_content}"
+            )
+        else:
+            prompt = (
+                f"Generate a GitHub Actions workflow for this {pipeline_type.value} pipeline "
+                f"based on the migration plan below. Output ONLY raw YAML starting with `name:`.\n\n"
+                f"Plan:\n{plan_json}\n\nOriginal pipeline:\n{source_content}"
+            )
         response = await session.send_and_wait({"prompt": prompt}, timeout=180)
         raw = response.data.content if response else ""
 
@@ -324,6 +357,7 @@ async def generate_workflow(
     pipeline_type: PipelineType,
     byok: BYOKProviderConfig | None = None,
     on_eval_update: callable | None = None,
+    target_file: OutputFileSpec | None = None,
 ) -> tuple[str, list[EvalResult]]:
     """Generate GitHub Actions YAML with evaluator-optimizer loop.
 
@@ -337,11 +371,12 @@ async def generate_workflow(
         pipeline_type: Source pipeline type.
         byok: Optional BYOK config.
         on_eval_update: Optional callback(eval_result) for progress reporting.
+        target_file: Optional specific file to generate (for parallel multi-file).
 
     Returns:
         (final_yaml, list_of_eval_results)
     """
-    yaml_content = await _generate_yaml(client, plan, source_content, pipeline_type, byok)
+    yaml_content = await _generate_yaml(client, plan, source_content, pipeline_type, byok, target_file)
     eval_results: list[EvalResult] = []
 
     for iteration in range(MAX_ITERATIONS):
@@ -366,3 +401,142 @@ async def generate_workflow(
             yaml_content = await _refine_yaml(client, yaml_content, eval_result, byok)
 
     return yaml_content, eval_results
+
+
+# ── Merge agent ──────────────────────────────────────────────────────────────
+
+
+async def _merge_files(
+    client: CopilotClient,
+    files: list[GeneratedFile],
+    plan: MigrationPlan,
+    byok: BYOKProviderConfig | None,
+) -> list[GeneratedFile]:
+    """Run a cross-file consistency pass on all generated files."""
+    if len(files) <= 1:
+        return files
+
+    model = byok.model_name if byok else "openai/gpt-5.4-mini"
+    session_opts: dict = {
+        "model": model,
+        "system_message": {"mode": "replace", "content": MERGE_SYSTEM},
+        "on_permission_request": PermissionHandler.approve_all,
+    }
+    provider = byok.to_sdk_provider() if byok else None
+    if provider:
+        session_opts["provider"] = provider
+
+    session = await client.create_session(session_opts)
+    try:
+        files_context = "\n\n".join(
+            f"### {f.filename} ({f.file_type})\n```yaml\n{f.content}\n```"
+            for f in files
+        )
+        prompt = (
+            f"Review and fix cross-file consistency for these {len(files)} workflow files.\n\n"
+            f"{files_context}\n\n"
+            f"Migration plan:\n```json\n{plan.model_dump_json(indent=2)}\n```"
+        )
+        response = await session.send_and_wait({"prompt": prompt}, timeout=180)
+        raw = response.data.content if response else ""
+
+        # Parse JSON array response
+        text = raw.strip()
+        fence_match = re.search(r"```(?:json)?\s*\n?(.*?)```", text, re.DOTALL)
+        if fence_match:
+            text = fence_match.group(1).strip()
+        else:
+            bracket_start = text.find("[")
+            bracket_end = text.rfind("]")
+            if bracket_start != -1 and bracket_end > bracket_start:
+                text = text[bracket_start : bracket_end + 1]
+
+        try:
+            merged = json.loads(text)
+            if isinstance(merged, list):
+                # Build lookup for original file types
+                type_lookup = {f.filename: f.file_type for f in files}
+                return [
+                    GeneratedFile(
+                        filename=m.get("filename", f"file-{i}.yml"),
+                        content=m.get("content", ""),
+                        file_type=type_lookup.get(m.get("filename", ""), "workflow"),
+                    )
+                    for i, m in enumerate(merged)
+                ]
+        except json.JSONDecodeError:
+            logger.warning("Merge agent returned non-JSON, keeping original files")
+
+        return files
+    finally:
+        sid = session.session_id
+        await session.disconnect()
+        try:
+            await client.delete_session(sid)
+        except Exception:
+            pass
+
+
+# ── Parallel multi-file generation ───────────────────────────────────────────
+
+
+async def generate_workflows_parallel(
+    client: CopilotClient,
+    plan: MigrationPlan,
+    source_content: str,
+    pipeline_type: PipelineType,
+    byok: BYOKProviderConfig | None = None,
+    on_progress: callable | None = None,
+) -> tuple[list[GeneratedFile], list[EvalResult]]:
+    """Generate multiple workflow files in parallel, then merge for consistency.
+
+    Each output_file from the plan gets its own generator→evaluator→refiner loop
+    running concurrently. After all files are generated, a merge agent checks
+    cross-file consistency.
+
+    Args:
+        client: Shared CopilotClient.
+        plan: Migration plan with output_files.
+        source_content: Full source content (main + templates).
+        pipeline_type: Source pipeline type.
+        byok: Optional BYOK config.
+        on_progress: Optional async callback(message) for progress updates.
+
+    Returns:
+        (list_of_generated_files, all_eval_results)
+    """
+    output_files = plan.output_files
+    if not output_files:
+        # Fallback to single-file generation
+        yaml, evals = await generate_workflow(client, plan, source_content, pipeline_type, byok)
+        return [GeneratedFile(filename=f"{plan.workflow_name or 'workflow'}.yml", content=yaml)], evals
+
+    total = len(output_files)
+
+    async def gen_single(idx: int, file_spec: OutputFileSpec) -> tuple[GeneratedFile, list[EvalResult]]:
+        if on_progress:
+            await on_progress(f"Generating file {idx + 1}/{total}: {file_spec.filename}...")
+
+        yaml, evals = await generate_workflow(
+            client, plan, source_content, pipeline_type, byok,
+            target_file=file_spec,
+        )
+        return GeneratedFile(
+            filename=file_spec.filename,
+            content=yaml,
+            file_type=file_spec.file_type,
+        ), evals
+
+    # Run all generators in parallel
+    results = await asyncio.gather(*(gen_single(i, fs) for i, fs in enumerate(output_files)))
+
+    all_files = [r[0] for r in results]
+    all_evals = [e for r in results for e in r[1]]
+
+    # Merge pass for cross-file consistency
+    if on_progress:
+        await on_progress(f"Merging {len(all_files)} files for consistency...")
+
+    all_files = await _merge_files(client, all_files, plan, byok)
+
+    return all_files, all_evals

@@ -19,6 +19,7 @@ class Stage(str, Enum):
     QUEUED = "queued"
     VALIDATING = "validating"
     VALIDATED = "validated"
+    REQUESTING_TEMPLATES = "requesting_templates"
     PLANNING = "planning"
     PLAN_READY = "plan_ready"
     AWAITING_APPROVAL = "awaiting_approval"
@@ -62,6 +63,27 @@ class Enhancement(BaseModel):
     description: str  # what it does and why
 
 
+class TemplateReference(BaseModel):
+    """A template file referenced by the source pipeline."""
+    path: str
+    required: bool = True
+
+
+class OutputFileSpec(BaseModel):
+    """Specification for a generated output file in the migration plan."""
+    filename: str
+    file_type: str = "workflow"  # workflow | reusable | composite
+    description: str = ""
+    job_names: list[str] = Field(default_factory=list)
+
+
+class GeneratedFile(BaseModel):
+    """A single generated workflow/action file."""
+    filename: str
+    content: str
+    file_type: str = "workflow"
+
+
 class MigrationPlan(BaseModel):
     workflow_name: str = ""
     workflow_type: str = ""  # standalone | reusable | composite
@@ -71,6 +93,8 @@ class MigrationPlan(BaseModel):
     prerequisites: list[Prerequisite] = Field(default_factory=list)
     enhancements: list[Enhancement] = Field(default_factory=list)
     warnings: list[PlanWarning] = Field(default_factory=list)
+    referenced_templates: list[TemplateReference] = Field(default_factory=list)
+    output_files: list[OutputFileSpec] = Field(default_factory=list)
     raw_plan: str = ""  # full text plan from the agent
 
 
@@ -138,6 +162,7 @@ class MigrationResult(BaseModel):
     source_type: PipelineType
     plan: MigrationPlan | None = None
     generated_yaml: str = ""
+    generated_files: list[GeneratedFile] = Field(default_factory=list)
     eval_results: list[EvalResult] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
     error: str | None = None

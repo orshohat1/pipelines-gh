@@ -6,6 +6,7 @@ export type Stage =
   | "queued"
   | "validating"
   | "validated"
+  | "requesting_templates"
   | "planning"
   | "plan_ready"
   | "awaiting_approval"
@@ -33,6 +34,22 @@ export interface HumanQuestion {
 export interface PlanApprovalRequest {
   file_id: string;
   plan: Record<string, unknown>;
+}
+
+export interface TemplateRef {
+  path: string;
+  required: boolean;
+}
+
+export interface TemplateRequestMsg {
+  file_id: string;
+  templates: TemplateRef[];
+}
+
+export interface GeneratedFile {
+  filename: string;
+  content: string;
+  file_type: string;
 }
 
 export interface EvalDimension {
@@ -71,6 +88,7 @@ export interface PipelineFile {
   /** Preserved validation data (pipeline_type, confidence, details). */
   validationData?: Record<string, unknown> | null;
   yaml?: string;
+  generatedFiles?: GeneratedFile[];
   warnings?: string[];
 }
 
@@ -86,4 +104,5 @@ export interface BYOKConfig {
 export type ServerMessage =
   | ({ type: "stage_update" } & StageUpdate)
   | ({ type: "question" } & HumanQuestion)
-  | ({ type: "plan_approval_request" } & PlanApprovalRequest);
+  | ({ type: "plan_approval_request" } & PlanApprovalRequest)
+  | ({ type: "template_request" } & TemplateRequestMsg);

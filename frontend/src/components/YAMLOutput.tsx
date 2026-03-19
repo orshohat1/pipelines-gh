@@ -1,32 +1,45 @@
 import { useState } from "react";
 import { Copy, Download, X, Check, FileCode } from "lucide-react";
+import type { GeneratedFile } from "../types";
 
 interface Props {
   yaml: string;
   filename: string;
   onClose: () => void;
+  files?: GeneratedFile[];
 }
 
-export default function YAMLOutput({ yaml, filename, onClose }: Props) {
+export default function YAMLOutput({ yaml, filename, onClose, files }: Props) {
   const [copied, setCopied] = useState(false);
+  const [activeTab, setActiveTab] = useState(0);
+
+  const tabs = files && files.length > 1
+    ? files.map((f) => ({ name: f.filename, content: f.content }))
+    : [{ name: filename, content: yaml }];
+
+  const current = tabs[activeTab] ?? tabs[0]!;
 
   const copyToClipboard = () => {
-    navigator.clipboard.writeText(yaml);
+    navigator.clipboard.writeText(current.content);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
   };
 
-  const download = () => {
-    const blob = new Blob([yaml], { type: "application/x-yaml" });
+  const downloadFile = (name: string, content: string) => {
+    const blob = new Blob([content], { type: "application/x-yaml" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = filename.replace(/\.[^.]+$/, "") + ".github-actions.yml";
+    a.download = name;
     a.click();
     URL.revokeObjectURL(url);
   };
 
-  const lineCount = yaml.split("\n").length;
+  const downloadAll = () => {
+    for (const t of tabs) downloadFile(t.name, t.content);
+  };
+
+  const lineCount = current.content.split("\n").length;
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-md p-4">
@@ -38,9 +51,11 @@ export default function YAMLOutput({ yaml, filename, onClose }: Props) {
               <FileCode size={16} className="text-emerald-400" />
             </div>
             <div>
-              <h2 className="text-sm font-semibold text-gray-100">Generated Workflow</h2>
+              <h2 className="text-sm font-semibold text-gray-100">
+                {tabs.length > 1 ? "Generated Workflows" : "Generated Workflow"}
+              </h2>
               <p className="text-xs text-gray-500">
-                {filename} &middot; {lineCount} lines
+                {tabs.length > 1 ? `${tabs.length} files` : filename} &middot; {lineCount} lines
               </p>
             </div>
           </div>
@@ -59,7 +74,7 @@ export default function YAMLOutput({ yaml, filename, onClose }: Props) {
             </button>
             <button
               type="button"
-              onClick={download}
+              onClick={() => downloadFile(current.name, current.content)}
               className="flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs text-gray-400 hover:bg-gray-800 hover:text-white transition"
             >
               <Download size={14} />
@@ -76,18 +91,38 @@ export default function YAMLOutput({ yaml, filename, onClose }: Props) {
           </div>
         </div>
 
+        {/* Tab bar for multi-file */}
+        {tabs.length > 1 && (
+          <div className="flex items-center gap-1 border-b border-gray-800/50 px-6 py-2 overflow-x-auto">
+            {tabs.map((t, idx) => (
+              <button
+                key={t.name}
+                type="button"
+                onClick={() => { setActiveTab(idx); setCopied(false); }}
+                className={`shrink-0 rounded-lg px-3 py-1.5 text-xs font-mono transition ${
+                  idx === activeTab
+                    ? "bg-indigo-600/20 text-indigo-400 ring-1 ring-indigo-500/30"
+                    : "text-gray-500 hover:bg-gray-800 hover:text-gray-300"
+                }`}
+              >
+                {t.name}
+              </button>
+            ))}
+          </div>
+        )}
+
         {/* YAML content with line numbers */}
         <div className="flex-1 overflow-auto">
           <div className="flex min-h-full">
             {/* Line numbers */}
             <div className="sticky left-0 flex flex-col items-end border-r border-gray-800/50 bg-gray-950 px-3 py-5 text-xs leading-relaxed text-gray-700 font-mono select-none">
-              {yaml.split("\n").map((_, i) => (
+              {current.content.split("\n").map((_, i) => (
                 <span key={i}>{i + 1}</span>
               ))}
             </div>
             {/* Code */}
             <pre className="flex-1 p-5 text-sm leading-relaxed text-emerald-300/90 font-mono whitespace-pre yaml-code">
-              {yaml}
+              {current.content}
             </pre>
           </div>
         </div>
@@ -97,13 +132,24 @@ export default function YAMLOutput({ yaml, filename, onClose }: Props) {
           <p className="text-[10px] text-gray-600">
             Save to .github/workflows/ in your repository
           </p>
-          <button
-            type="button"
-            onClick={download}
-            className="rounded-lg bg-indigo-600 px-4 py-1.5 text-xs font-medium text-white hover:bg-indigo-500 transition active:scale-[0.98]"
-          >
-            Download .yml
-          </button>
+          <div className="flex items-center gap-2">
+            {tabs.length > 1 && (
+              <button
+                type="button"
+                onClick={downloadAll}
+                className="rounded-lg border border-indigo-500/30 px-4 py-1.5 text-xs font-medium text-indigo-400 hover:bg-indigo-600/10 transition active:scale-[0.98]"
+              >
+                Download all ({tabs.length})
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={() => downloadFile(current.name, current.content)}
+              className="rounded-lg bg-indigo-600 px-4 py-1.5 text-xs font-medium text-white hover:bg-indigo-500 transition active:scale-[0.98]"
+            >
+              Download .yml
+            </button>
+          </div>
         </div>
       </div>
     </div>

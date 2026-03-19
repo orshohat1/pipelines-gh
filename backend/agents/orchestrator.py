@@ -4,18 +4,20 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import tempfile
 import uuid
 from typing import Any, Callable, Coroutine
 
 from copilot import CopilotClient
 
-from backend.agents.coder import generate_workflow
+from backend.agents.coder import generate_workflow, generate_workflows_parallel
 from backend.agents.planner import plan_migration
 from backend.agents.validator import validate_pipeline
 from backend.config import BYOKProviderConfig, settings
 from backend.models import (
     EvalResult,
+    GeneratedFile,
     MigrationResult,
     PipelineType,
     PlanApproval,
@@ -25,6 +27,36 @@ from backend.models import (
 from backend.websocket import ConnectionManager
 
 logger = logging.getLogger(__name__)
+
+
+# ── Template detection ───────────────────────────────────────────────────────
+
+
+def detect_template_refs(content: str, pipeline_type: PipelineType) -> list[dict[str, Any]]:
+    """Detect template/include references in pipeline content."""
+    refs: list[dict[str, Any]] = []
+    seen: set[str] = set()
+
+    if pipeline_type == PipelineType.AZURE_DEVOPS:
+        for match in re.finditer(r'template:\s*([^\s#]+\.ya?ml)', content):
+            path = match.group(1).strip()
+            if path not in seen:
+                seen.add(path)
+                refs.append({"path": path, "required": True})
+    elif pipeline_type == PipelineType.GITLAB_CI:
+        for match in re.finditer(r"(?:local|file):\s*['\"]?([^'\"\s]+\.ya?ml)['\"]?", content):
+            path = match.group(1).strip()
+            if path not in seen:
+                seen.add(path)
+                refs.append({"path": path, "required": True})
+    elif pipeline_type == PipelineType.JENKINS:
+        for match in re.finditer(r"@Library\(['\"]([^'\"]+)['\"]\)", content):
+            name = match.group(1)
+            if name not in seen:
+                seen.add(name)
+                refs.append({"path": name, "required": False})
+
+    return refs
 
 
 async def _process_single_file(
@@ -78,8 +110,25 @@ async def _process_single_file(
         data=validation.model_dump(),
     )
 
+    # ── Template detection ───────────────────────────────────────────────
+    template_refs = detect_template_refs(content, validation.pipeline_type)
+    template_contents: list[dict[str, str]] = []
+
+    if template_refs:
+        await emit(
+            Stage.REQUESTING_TEMPLATES,
+            f"Found {len(template_refs)} template reference(s). Please provide the template files.",
+            data={"templates": template_refs},
+        )
+        template_contents = await ws_manager.request_templates(job_id, file_id, template_refs)
+        if template_contents:
+            await emit(Stage.PLANNING, f"Received {len(template_contents)} template(s). Planning full migration...")
+        else:
+            await emit(Stage.PLANNING, "No templates provided. Proceeding with best-effort plan...")
+    else:
+        await emit(Stage.PLANNING, "Generating migration plan...")
+
     # ── Stage 2: Planning ────────────────────────────────────────────────
-    await emit(Stage.PLANNING, "Generating migration plan...")
 
     async def on_user_question(question: str, choices: list[str] | None) -> str:
         question_id = str(uuid.uuid4())
@@ -93,6 +142,7 @@ async def _process_single_file(
             validation.pipeline_type,
             byok,
             on_user_question=on_user_question,
+            template_contents=template_contents or None,
         )
     except Exception as e:
         logger.exception("Planning failed for %s", filename)
@@ -127,6 +177,7 @@ async def _process_single_file(
                     on_user_question=on_user_question,
                     revision_feedback=approval.feedback,
                     previous_plan=plan_data,
+                    template_contents=template_contents or None,
                 )
             except Exception as e:
                 logger.exception("Plan revision failed for %s", filename)
@@ -156,7 +207,12 @@ async def _process_single_file(
         break
 
     # ── Stage 3: Code Generation (with eval loop) ────────────────────────
-    await emit(Stage.CODING, "Generating GitHub Actions workflow YAML...")
+    use_parallel = bool(plan.output_files and len(plan.output_files) > 1)
+
+    if use_parallel:
+        await emit(Stage.CODING, f"Generating {len(plan.output_files)} workflow files in parallel...")
+    else:
+        await emit(Stage.CODING, "Generating GitHub Actions workflow YAML...")
 
     async def on_eval_update(eval_result: EvalResult) -> None:
         await emit(
@@ -167,14 +223,41 @@ async def _process_single_file(
         )
 
     try:
-        yaml_content, eval_results = await generate_workflow(
-            client,
-            plan,
-            content,
-            validation.pipeline_type,
-            byok,
-            on_eval_update=on_eval_update,
-        )
+        if use_parallel:
+            # Build full source context including templates
+            full_source = content
+            if template_contents:
+                for tc in template_contents:
+                    full_source += f"\n\n# Template: {tc['path']}\n{tc['content']}"
+
+            generated_files, eval_results = await generate_workflows_parallel(
+                client,
+                plan,
+                full_source,
+                validation.pipeline_type,
+                byok=byok,
+                on_progress=lambda msg: emit(Stage.CODING, msg),
+            )
+            yaml_content = generated_files[0].content if generated_files else ""
+        else:
+            source_for_gen = content
+            if template_contents:
+                for tc in template_contents:
+                    source_for_gen += f"\n\n# Template: {tc['path']}\n{tc['content']}"
+
+            yaml_content, eval_results = await generate_workflow(
+                client,
+                plan,
+                source_for_gen,
+                validation.pipeline_type,
+                byok,
+                on_eval_update=on_eval_update,
+            )
+            generated_files = [GeneratedFile(
+                filename=f"{plan.workflow_name or 'workflow'}.yml",
+                content=yaml_content,
+                file_type="workflow",
+            )]
     except Exception as e:
         logger.exception("Code generation failed for %s", filename)
         await emit(Stage.ERROR, f"Code generation failed: {e}")
@@ -199,14 +282,23 @@ async def _process_single_file(
         source_type=validation.pipeline_type,
         plan=plan,
         generated_yaml=yaml_content,
+        generated_files=generated_files,
         eval_results=eval_results,
         warnings=warnings,
     )
 
+    file_count = len(generated_files)
+    score_msg = f" — final score: {eval_results[-1].overall_score:.0%}" if eval_results else ""
+    files_msg = f" ({file_count} files)" if file_count > 1 else ""
+
     await emit(
         Stage.COMPLETED,
-        f"Migration complete — final score: {eval_results[-1].overall_score:.0%}" if eval_results else "Migration complete",
-        data={"yaml": yaml_content, "warnings": warnings},
+        f"Migration complete{files_msg}{score_msg}",
+        data={
+            "yaml": yaml_content,
+            "generated_files": [f.model_dump() for f in generated_files],
+            "warnings": warnings,
+        },
     )
 
     return result

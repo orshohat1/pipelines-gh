@@ -24,6 +24,8 @@ class ConnectionManager:
         self._pending_questions: dict[str, asyncio.Future[str]] = {}
         # Pending plan approvals: file_id -> asyncio.Future
         self._pending_approvals: dict[str, asyncio.Future[PlanApproval]] = {}
+        # Pending template file requests: file_id -> asyncio.Future
+        self._pending_templates: dict[str, asyncio.Future[list[dict[str, str]]]] = {}
 
     async def connect(self, job_id: str, websocket: WebSocket) -> None:
         await websocket.accept()
@@ -139,6 +141,37 @@ class ConnectionManager:
         if future and not future.done():
             future.set_result(approval)
 
+    async def request_templates(
+        self,
+        job_id: str,
+        file_id: str,
+        templates: list[dict[str, Any]],
+    ) -> list[dict[str, str]]:
+        """Request template file contents from the user and wait for response."""
+        message = json.dumps({
+            "type": "template_request",
+            "file_id": file_id,
+            "templates": templates,
+        })
+        for ws in self._connections.get(job_id, []):
+            try:
+                await ws.send_text(message)
+            except Exception:
+                pass
+
+        loop = asyncio.get_event_loop()
+        future: asyncio.Future[list[dict[str, str]]] = loop.create_future()
+        self._pending_templates[file_id] = future
+
+        try:
+            result = await asyncio.wait_for(future, timeout=600)
+            return result
+        except asyncio.TimeoutError:
+            logger.warning("Template request for %s timed out", file_id)
+            return []
+        finally:
+            self._pending_templates.pop(file_id, None)
+
     async def handle_client_message(self, job_id: str, raw: str) -> None:
         """Process an incoming message from a WebSocket client."""
         try:
@@ -165,6 +198,12 @@ class ConnectionManager:
                     revise=data.get("revise", False),
                 )
             )
+        elif msg_type == "template_response":
+            file_id = data.get("file_id", "")
+            templates = data.get("templates", [])
+            future = self._pending_templates.get(file_id)
+            if future and not future.done():
+                future.set_result(templates)
         else:
             logger.warning("Unknown message type from client: %s", msg_type)
 

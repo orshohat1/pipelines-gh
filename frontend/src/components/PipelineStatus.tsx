@@ -14,7 +14,7 @@ import {
 
 /** Visible pipeline stages shown in the stepper (collapsed from internal stages). */
 const VISIBLE_STAGES = [
-  { key: "validate", label: "Validate", covers: ["queued", "validating", "validated"] as Stage[] },
+  { key: "validate", label: "Validate", covers: ["queued", "validating", "validated", "requesting_templates"] as Stage[] },
   { key: "plan", label: "Plan", covers: ["planning", "plan_ready"] as Stage[] },
   { key: "approve", label: "Approve", covers: ["awaiting_approval"] as Stage[] },
   { key: "generate", label: "Generate", covers: ["coding"] as Stage[] },
@@ -40,6 +40,8 @@ function stageIcon(stage: Stage, size = 16) {
     case "validating":
     case "validated":
       return <Search size={size} className="text-indigo-400 animate-spin" />;
+    case "requesting_templates":
+      return <FileCode size={size} className="text-amber-400 animate-pulse" />;
     case "planning":
     case "plan_ready":
       return <ClipboardList size={size} className="text-indigo-400 animate-spin" />;
@@ -57,6 +59,7 @@ function stageLabel(stage: Stage): string {
     queued: "Queued",
     validating: "Analyzing pipeline...",
     validated: "Pipeline identified",
+    requesting_templates: "Waiting for template files...",
     planning: "Creating migration plan...",
     plan_ready: "Plan ready",
     awaiting_approval: "Awaiting your approval",
