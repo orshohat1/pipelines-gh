@@ -22,14 +22,32 @@ interface Props {
 
 /** Build a plain-language summary of the migration plan. */
 function buildSummary(raw: Record<string, unknown>) {
-  const workflowName = typeof raw.workflow_name === "string" ? raw.workflow_name : "GitHub Actions workflow";
-  const description = typeof raw.description === "string" ? raw.description : "";
-  const triggers = Array.isArray(raw.triggers) ? (raw.triggers as string[]) : [];
-  const jobs = Array.isArray(raw.jobs) ? (raw.jobs as Record<string, unknown>[]) : [];
-  const warnings = Array.isArray(raw.warnings) ? (raw.warnings as { severity: string; message: string }[]) : [];
-  const prerequisites = Array.isArray(raw.prerequisites) ? (raw.prerequisites as { what: string; why: string; how: string }[]) : [];
-  const enhancements = Array.isArray(raw.enhancements) ? (raw.enhancements as { title: string; description: string }[]) : [];
-  const outputFiles = Array.isArray(raw.output_files) ? (raw.output_files as { filename: string; file_type: string; description: string }[]) : [];
+  // If structured fields are empty but raw_plan has data, try parsing it
+  let plan = raw;
+  if (
+    !raw.workflow_name &&
+    (!Array.isArray(raw.jobs) || raw.jobs.length === 0) &&
+    typeof raw.raw_plan === "string" &&
+    raw.raw_plan.trim().startsWith("{")
+  ) {
+    try {
+      const parsed = JSON.parse(raw.raw_plan as string) as Record<string, unknown>;
+      if (parsed.workflow_name || (Array.isArray(parsed.jobs) && parsed.jobs.length > 0)) {
+        plan = parsed;
+      }
+    } catch {
+      // keep using original raw
+    }
+  }
+
+  const workflowName = typeof plan.workflow_name === "string" ? plan.workflow_name : "GitHub Actions workflow";
+  const description = typeof plan.description === "string" ? plan.description : "";
+  const triggers = Array.isArray(plan.triggers) ? (plan.triggers as string[]) : [];
+  const jobs = Array.isArray(plan.jobs) ? (plan.jobs as Record<string, unknown>[]) : [];
+  const warnings = Array.isArray(plan.warnings) ? (plan.warnings as { severity: string; message: string }[]) : [];
+  const prerequisites = Array.isArray(plan.prerequisites) ? (plan.prerequisites as { what: string; why: string; how: string }[]) : [];
+  const enhancements = Array.isArray(plan.enhancements) ? (plan.enhancements as { title: string; description: string }[]) : [];
+  const outputFiles = Array.isArray(plan.output_files) ? (plan.output_files as { filename: string; file_type: string; description: string }[]) : [];
 
   const sentences: string[] = [];
 

@@ -31,7 +31,9 @@ Security rules (apply to every workflow):
 - Use built-in caching and set `retention-days` on artifacts"""
 
 _JSON_SCHEMA = """\
+Always respond in English.
 Return ONLY a valid JSON object (no markdown, no fences, no extra text).
+Do NOT use escaped quotes (\\" ) as string delimiters — use plain double quotes (").
 
 {
   "workflow_name": "string",
@@ -247,8 +249,13 @@ async def plan_migration(
         try:
             data = json.loads(text)
         except json.JSONDecodeError:
-            logger.warning("Planner returned non-JSON: %s", raw[:300])
-            return MigrationPlan(raw_plan=raw)
+            # LLMs sometimes use \" as string delimiters instead of " — repair and retry
+            repaired = text.replace('\\"', '"')
+            try:
+                data = json.loads(repaired)
+            except json.JSONDecodeError:
+                logger.warning("Planner returned non-JSON: %s", raw[:300])
+                return MigrationPlan(raw_plan=raw)
 
         return MigrationPlan(
             workflow_name=data.get("workflow_name", ""),
