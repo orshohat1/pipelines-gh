@@ -165,7 +165,7 @@ async def plan_migration(
         revision_feedback: User feedback for revising a previous plan.
         previous_plan: The previous plan JSON to revise.
     """
-    model = byok.model_name if byok else "gpt-4o-mini"
+    model = byok.model_name if byok else "openai/gpt-5.4-mini"
     system_prompt = _PROMPTS.get(pipeline_type, GENERIC_PROMPT)
     session_opts: dict = {
         "model": model,

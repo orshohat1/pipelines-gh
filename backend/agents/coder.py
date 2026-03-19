@@ -157,7 +157,7 @@ async def _evaluate_yaml(
     byok: BYOKProviderConfig | None,
 ) -> EvalResult:
     """Evaluate generated YAML against the quality rubric + actionlint."""
-    model = byok.model_name if byok else "claude-sonnet-4.6"
+    model = byok.model_name if byok else "openai/gpt-5.4-mini"
     session_opts: dict = {
         "model": model,
         "system_message": {"mode": "append", "content": EVALUATOR_SYSTEM},
@@ -294,7 +294,7 @@ async def _refine_yaml(
 # ── Public API ───────────────────────────────────────────────────────────────
 
 SCORE_THRESHOLD = 0.8
-MAX_ITERATIONS = 3
+MAX_ITERATIONS = 2
 
 
 async def generate_workflow(

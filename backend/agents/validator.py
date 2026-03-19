@@ -54,7 +54,7 @@ async def validate_pipeline(
 
     Returns a ValidationResult with the detected pipeline type.
     """
-    model = byok.model_name if byok else "claude-sonnet-4.6"
+    model = byok.model_name if byok else "openai/gpt-5.4-mini"
     session_opts: dict = {
         "model": model,
         "system_message": {"mode": "replace", "content": SYSTEM_MESSAGE},
