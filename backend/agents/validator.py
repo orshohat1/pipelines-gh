@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+from pathlib import Path
 
 from copilot import CopilotClient, PermissionHandler
 
@@ -52,10 +53,12 @@ async def validate_pipeline(
     Returns a ValidationResult with the detected pipeline type.
     """
     model = byok.model_name if byok else "claude-sonnet-4.6"
+    project_root = str(Path(__file__).resolve().parents[2])
     session_opts: dict = {
         "model": model,
-        "system_message": {"content": SYSTEM_MESSAGE},
+        "system_message": {"mode": "replace", "content": SYSTEM_MESSAGE},
         "on_permission_request": PermissionHandler.approve_all,
+        "config_dir": project_root,
     }
     provider = byok.to_sdk_provider() if byok else None
     if provider:
@@ -68,7 +71,7 @@ async def validate_pipeline(
             f"Filename: {filename}\n\n"
             f"```\n{content}\n```"
         )
-        response = await session.send_and_wait(prompt)
+        response = await session.send_and_wait({"prompt": prompt}, timeout=120)
         raw = response.data.content if response else ""
 
         # Parse JSON from the response — strip markdown fences if present

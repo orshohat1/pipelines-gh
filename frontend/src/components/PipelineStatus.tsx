@@ -1,59 +1,71 @@
 import type { PipelineFile, Stage } from "../types";
 import {
   CheckCircle2,
-  Circle,
   AlertTriangle,
   Loader2,
-  Clock,
-  ShieldQuestion,
+  ShieldCheck,
+  FileCode,
+  Code2,
+  Eye,
+  Search,
+  ClipboardList,
+  ExternalLink,
 } from "lucide-react";
 
-const STAGE_ORDER: Stage[] = [
-  "queued",
-  "validating",
-  "validated",
-  "planning",
-  "plan_ready",
-  "awaiting_approval",
-  "coding",
-  "evaluating",
-  "completed",
+/** Visible pipeline stages shown in the stepper (collapsed from internal stages). */
+const VISIBLE_STAGES = [
+  { key: "validate", label: "Validate", covers: ["queued", "validating", "validated"] as Stage[] },
+  { key: "plan", label: "Plan", covers: ["planning", "plan_ready"] as Stage[] },
+  { key: "approve", label: "Approve", covers: ["awaiting_approval"] as Stage[] },
+  { key: "generate", label: "Generate", covers: ["coding"] as Stage[] },
+  { key: "evaluate", label: "Evaluate", covers: ["evaluating"] as Stage[] },
+  { key: "done", label: "Done", covers: ["completed"] as Stage[] },
 ];
 
-function stageIcon(stage: Stage) {
+function getVisibleIndex(stage: Stage): number {
+  for (let i = 0; i < VISIBLE_STAGES.length; i++) {
+    if (VISIBLE_STAGES[i]!.covers.includes(stage)) return i;
+  }
+  return -1;
+}
+
+function stageIcon(stage: Stage, size = 16) {
   switch (stage) {
     case "completed":
-      return <CheckCircle2 size={16} className="text-green-400" />;
+      return <CheckCircle2 size={size} className="text-emerald-400" />;
     case "error":
-      return <AlertTriangle size={16} className="text-red-400" />;
+      return <AlertTriangle size={size} className="text-red-400" />;
     case "awaiting_approval":
-      return <ShieldQuestion size={16} className="text-amber-400 animate-pulse" />;
-    case "queued":
-      return <Clock size={16} className="text-gray-500" />;
+      return <ShieldCheck size={size} className="text-amber-400 animate-pulse" />;
+    case "validating":
+    case "validated":
+      return <Search size={size} className="text-indigo-400 animate-spin" />;
+    case "planning":
+    case "plan_ready":
+      return <ClipboardList size={size} className="text-indigo-400 animate-spin" />;
+    case "coding":
+      return <Code2 size={size} className="text-indigo-400 animate-spin" />;
+    case "evaluating":
+      return <Eye size={size} className="text-indigo-400 animate-spin" />;
     default:
-      return <Loader2 size={16} className="text-indigo-400 animate-spin" />;
+      return <Loader2 size={size} className="text-gray-500 animate-spin" />;
   }
 }
 
 function stageLabel(stage: Stage): string {
   const labels: Record<Stage, string> = {
     queued: "Queued",
-    validating: "Validating",
-    validated: "Validated",
-    planning: "Planning",
-    plan_ready: "Plan Ready",
-    awaiting_approval: "Awaiting Approval",
-    coding: "Generating YAML",
-    evaluating: "Evaluating",
-    completed: "Completed",
+    validating: "Analyzing pipeline...",
+    validated: "Pipeline identified",
+    planning: "Creating migration plan...",
+    plan_ready: "Plan ready",
+    awaiting_approval: "Awaiting your approval",
+    coding: "Generating workflow...",
+    evaluating: "Evaluating quality...",
+    completed: "Migration complete",
     error: "Error",
   };
   return labels[stage];
-}
-
-function stageIndex(stage: Stage): number {
-  const idx = STAGE_ORDER.indexOf(stage);
-  return idx === -1 ? STAGE_ORDER.length : idx;
 }
 
 interface Props {
@@ -62,44 +74,98 @@ interface Props {
 }
 
 export default function PipelineStatus({ file, onViewYaml }: Props) {
-  const current = stageIndex(file.stage);
-  const total = STAGE_ORDER.length;
-  const progress = file.stage === "error" ? current : Math.min(((current + 1) / total) * 100, 100);
+  const currentVisibleIdx = getVisibleIndex(file.stage);
+  const isError = file.stage === "error";
+  const isComplete = file.stage === "completed";
 
   return (
-    <div className="rounded-xl border border-gray-800 bg-gray-900 p-4 space-y-3">
-      {/* Header */}
-      <div className="flex items-center gap-2">
-        {stageIcon(file.stage)}
-        <h3 className="text-sm font-medium text-gray-100 truncate flex-1">
-          {file.filename}
-        </h3>
-        <span className="rounded-full bg-gray-800 px-2 py-0.5 text-xs text-gray-400">
-          {stageLabel(file.stage)}
-        </span>
+    <div
+      className={`rounded-2xl border p-5 space-y-4 transition-all animate-fade-in-up ${
+        isComplete
+          ? "border-emerald-500/20 bg-emerald-500/5 glow-green"
+          : isError
+            ? "border-red-500/20 bg-red-500/5"
+            : "border-gray-800/50 bg-gray-900/50"
+      }`}
+    >
+      {/* Header row */}
+      <div className="flex items-center gap-3">
+        <div className={`flex h-9 w-9 items-center justify-center rounded-lg ${
+          isComplete ? "bg-emerald-500/10" : isError ? "bg-red-500/10" : "bg-gray-800"
+        }`}>
+          {isComplete ? (
+            <CheckCircle2 size={18} className="text-emerald-400" />
+          ) : isError ? (
+            <AlertTriangle size={18} className="text-red-400" />
+          ) : (
+            <FileCode size={18} className="text-indigo-400" />
+          )}
+        </div>
+        <div className="flex-1 min-w-0">
+          <h3 className="text-sm font-medium text-gray-100 truncate">{file.filename}</h3>
+          <p className={`text-xs ${isError ? "text-red-400" : isComplete ? "text-emerald-400" : "text-gray-500"}`}>
+            {stageLabel(file.stage)}
+          </p>
+        </div>
+        {!isError && !isComplete && stageIcon(file.stage, 18)}
       </div>
 
-      {/* Progress bar */}
-      <div className="h-1.5 w-full rounded-full bg-gray-800 overflow-hidden">
-        <div
-          className={`h-full rounded-full transition-all duration-500 ${
-            file.stage === "error" ? "bg-red-500" : file.stage === "completed" ? "bg-green-500" : "bg-indigo-500"
-          }`}
-          style={{ width: `${progress}%` }}
-        />
+      {/* Stage stepper */}
+      <div className="flex items-center gap-1">
+        {VISIBLE_STAGES.map((vs, idx) => {
+          const isDone = currentVisibleIdx > idx || isComplete;
+          const isCurrent = currentVisibleIdx === idx && !isComplete && !isError;
+          const isErrorStage = isError && currentVisibleIdx === idx;
+
+          return (
+            <div key={vs.key} className="flex-1 flex flex-col items-center gap-1.5">
+              {/* Segment bar */}
+              <div className="w-full h-1.5 rounded-full overflow-hidden bg-gray-800/50">
+                <div
+                  className={`h-full rounded-full transition-all duration-700 ${
+                    isDone
+                      ? "bg-emerald-500 w-full"
+                      : isCurrent
+                        ? "bg-indigo-500 w-full animate-pulse"
+                        : isErrorStage
+                          ? "bg-red-500 w-full"
+                          : "w-0"
+                  }`}
+                  style={{ width: isDone || isCurrent || isErrorStage ? "100%" : "0%" }}
+                />
+              </div>
+              {/* Label */}
+              <span
+                className={`text-[10px] leading-none transition ${
+                  isDone
+                    ? "text-emerald-400/70"
+                    : isCurrent
+                      ? "text-indigo-400 font-medium"
+                      : isErrorStage
+                        ? "text-red-400"
+                        : "text-gray-600"
+                }`}
+              >
+                {vs.label}
+              </span>
+            </div>
+          );
+        })}
       </div>
 
       {/* Message */}
       {file.message && (
-        <p className="text-xs text-gray-400 leading-relaxed">{file.message}</p>
+        <p className={`text-xs leading-relaxed ${isError ? "text-red-400/80" : "text-gray-400"}`}>
+          {file.message}
+        </p>
       )}
 
       {/* Warnings */}
       {file.warnings && file.warnings.length > 0 && (
-        <div className="space-y-1">
+        <div className="rounded-lg border border-amber-500/10 bg-amber-500/5 px-3 py-2 space-y-1">
           {file.warnings.map((w, i) => (
-            <p key={i} className="text-xs text-amber-400 flex items-start gap-1">
-              <AlertTriangle size={12} className="mt-0.5 shrink-0" />
+            <p key={i} className="text-xs text-amber-400 flex items-start gap-1.5">
+              <AlertTriangle size={11} className="mt-0.5 shrink-0" />
               {w}
             </p>
           ))}
@@ -107,13 +173,14 @@ export default function PipelineStatus({ file, onViewYaml }: Props) {
       )}
 
       {/* View YAML button */}
-      {file.stage === "completed" && file.yaml && (
+      {isComplete && file.yaml && (
         <button
           type="button"
-          className="text-xs text-indigo-400 hover:text-indigo-300 transition"
+          className="group flex items-center gap-1.5 text-xs font-medium text-indigo-400 hover:text-indigo-300 transition"
           onClick={onViewYaml}
         >
-          View generated YAML &rarr;
+          View generated workflow
+          <ExternalLink size={12} className="transition group-hover:translate-x-0.5" />
         </button>
       )}
     </div>

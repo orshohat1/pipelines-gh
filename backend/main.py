@@ -8,6 +8,7 @@ import logging
 import uuid
 
 from fastapi import FastAPI, File, Form, UploadFile, WebSocket, WebSocketDisconnect
+from pydantic import BaseModel
 from fastapi.middleware.cors import CORSMiddleware
 
 from backend.agents.orchestrator import run_migration
@@ -73,6 +74,39 @@ async def start_migration(
     asyncio.create_task(_run_job(job_id, file_list, byok))
 
     return MigrateResponse(job_id=job_id, file_count=len(file_list))
+
+
+class TextMigrateRequest(BaseModel):
+    content: str
+    filename: str = "pipeline.yml"
+    byok: BYOKConfigRequest | None = None
+
+
+@app.post("/api/migrate-text", response_model=MigrateResponse)
+async def start_text_migration(req: TextMigrateRequest) -> MigrateResponse:
+    """Accept raw pipeline text and optional BYOK config, start migration job."""
+    byok: BYOKProviderConfig | None = None
+    if req.byok and req.byok.api_key:
+        byok = BYOKProviderConfig(
+            provider_type=req.byok.provider_type,
+            base_url=req.byok.base_url,
+            api_key=req.byok.api_key,
+            model_name=req.byok.model_name,
+            wire_api=req.byok.wire_api,
+        )
+
+    file_list = [
+        {
+            "file_id": str(uuid.uuid4()),
+            "filename": req.filename,
+            "content": req.content,
+        }
+    ]
+
+    job_id = str(uuid.uuid4())
+    _job_results[job_id] = None
+    asyncio.create_task(_run_job(job_id, file_list, byok))
+    return MigrateResponse(job_id=job_id, file_count=1)
 
 
 async def _run_job(

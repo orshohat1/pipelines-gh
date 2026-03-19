@@ -12,6 +12,8 @@ from pathlib import Path
 
 from copilot import CopilotClient, PermissionHandler
 
+PROJECT_ROOT = str(Path(__file__).resolve().parents[2])
+
 from backend.config import BYOKProviderConfig, settings
 from backend.models import EvalDimension, EvalResult, MigrationPlan, PipelineType
 
@@ -135,8 +137,9 @@ async def _generate_yaml(
     model = byok.model_name if byok else "claude-sonnet-4.6"
     session_opts: dict = {
         "model": model,
-        "system_message": {"content": GENERATOR_SYSTEM},
+        "system_message": {"mode": "replace", "content": GENERATOR_SYSTEM},
         "on_permission_request": PermissionHandler.approve_all,
+        "config_dir": PROJECT_ROOT,
     }
     provider = byok.to_sdk_provider() if byok else None
     if provider:
@@ -150,7 +153,7 @@ async def _generate_yaml(
             f"## Migration Plan\n```json\n{plan.model_dump_json(indent=2)}\n```\n\n"
             f"## Original Pipeline\n```\n{source_content}\n```"
         )
-        response = await session.send_and_wait(prompt)
+        response = await session.send_and_wait({"prompt": prompt}, timeout=180)
         raw = response.data.content if response else ""
 
         # Strip markdown fences if present
@@ -178,8 +181,9 @@ async def _evaluate_yaml(
     model = byok.model_name if byok else "claude-sonnet-4.6"
     session_opts: dict = {
         "model": model,
-        "system_message": {"content": EVALUATOR_SYSTEM},
+        "system_message": {"mode": "replace", "content": EVALUATOR_SYSTEM},
         "on_permission_request": PermissionHandler.approve_all,
+        "config_dir": PROJECT_ROOT,
     }
     provider = byok.to_sdk_provider() if byok else None
     if provider:
@@ -195,7 +199,7 @@ async def _evaluate_yaml(
             f"## Generated Workflow\n```yaml\n{yaml_content}\n```\n\n"
             f"## Migration Plan (for completeness check)\n```json\n{plan.model_dump_json(indent=2)}\n```"
         )
-        response = await session.send_and_wait(prompt)
+        response = await session.send_and_wait({"prompt": prompt}, timeout=180)
         raw = response.data.content if response else ""
     finally:
         await session.disconnect()
@@ -262,8 +266,9 @@ async def _refine_yaml(
     model = byok.model_name if byok else "claude-sonnet-4.6"
     session_opts: dict = {
         "model": model,
-        "system_message": {"content": REFINER_SYSTEM},
+        "system_message": {"mode": "replace", "content": REFINER_SYSTEM},
         "on_permission_request": PermissionHandler.approve_all,
+        "config_dir": PROJECT_ROOT,
     }
     provider = byok.to_sdk_provider() if byok else None
     if provider:
@@ -281,7 +286,7 @@ async def _refine_yaml(
             f"## Issues to Fix\n{feedback_text}\n\n"
             f"## Current YAML\n```yaml\n{yaml_content}\n```"
         )
-        response = await session.send_and_wait(prompt)
+        response = await session.send_and_wait({"prompt": prompt}, timeout=180)
         raw = response.data.content if response else ""
 
         text = raw.strip()
