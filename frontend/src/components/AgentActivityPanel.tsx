@@ -1,6 +1,7 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   CheckCircle2,
+  Clock,
   Code2,
   Combine,
   Eye,
@@ -100,12 +101,38 @@ function getConfig(agentType: string) {
   return AGENT_CONFIG[agentType] ?? DEFAULT_CONFIG;
 }
 
+function formatElapsed(seconds: number): string {
+  if (seconds < 1) return "<1s";
+  if (seconds < 60) return `${Math.floor(seconds)}s`;
+  const mins = Math.floor(seconds / 60);
+  const secs = Math.floor(seconds % 60);
+  return `${mins}m${secs.toString().padStart(2, "0")}s`;
+}
+
 function AgentCard({ agent, index }: { agent: AgentActivity; index: number }) {
   const config = getConfig(agent.agent_type);
   const Icon = config.icon;
   const isRunning = agent.status === "running";
   const isCompleted = agent.status === "completed";
   const isError = agent.status === "error";
+
+  // Live elapsed-time counter for running agents
+  const [elapsed, setElapsed] = useState(0);
+  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  useEffect(() => {
+    if (isRunning && agent.timestamp > 0) {
+      const tick = () => setElapsed((Date.now() / 1000) - agent.timestamp);
+      tick();
+      timerRef.current = setInterval(tick, 250);
+      return () => { if (timerRef.current) clearInterval(timerRef.current); };
+    }
+    // For completed/error, show final snapshot
+    if (!isRunning && agent.timestamp > 0) {
+      setElapsed((Date.now() / 1000) - agent.timestamp);
+      if (timerRef.current) { clearInterval(timerRef.current); timerRef.current = null; }
+    }
+  }, [isRunning, agent.timestamp]);
 
   return (
     <div
@@ -163,10 +190,20 @@ function AgentCard({ agent, index }: { agent: AgentActivity; index: number }) {
         )}
       </div>
 
-      {/* Spinning indicator for running agents */}
-      {isRunning && (
-        <Loader2 size={12} className={`flex-shrink-0 animate-spin ${config.color} opacity-50`} />
-      )}
+      {/* Elapsed time + spinning indicator */}
+      <div className="flex flex-shrink-0 items-center gap-1.5">
+        {agent.timestamp > 0 && (
+          <span className={`flex items-center gap-0.5 text-[10px] font-mono tabular-nums ${
+            isRunning ? "text-gray-400" : "text-gray-600"
+          }`}>
+            <Clock size={9} className="opacity-50" />
+            {formatElapsed(elapsed)}
+          </span>
+        )}
+        {isRunning && (
+          <Loader2 size={12} className={`animate-spin ${config.color} opacity-50`} />
+        )}
+      </div>
     </div>
   );
 }

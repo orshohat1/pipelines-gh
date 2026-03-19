@@ -6,6 +6,7 @@ import asyncio
 import logging
 import re
 import tempfile
+import time
 import uuid
 from typing import Any, Callable, Coroutine
 
@@ -89,6 +90,7 @@ async def _process_single_file(
             "filename": filename,
             "detail": detail,
             "target_file": target_file,
+            "timestamp": time.time(),
         })
 
     # ── Stage 1: Validation ──────────────────────────────────────────────
@@ -108,7 +110,7 @@ async def _process_single_file(
             error=f"Validation failed: {e}",
         )
 
-    await emit_agent("validator", "completed", f"Detected {validation.pipeline_type.value}")
+    await emit_agent("validator", "completed", f"Detected {validation.pipeline_type.value} ({validation.complexity})")
 
     if validation.pipeline_type == PipelineType.UNKNOWN:
         await emit(
@@ -162,6 +164,7 @@ async def _process_single_file(
             byok,
             on_user_question=on_user_question,
             template_contents=template_contents or None,
+            use_advanced_model=(validation.complexity == "complex"),
         )
     except Exception as e:
         logger.exception("Planning failed for %s", filename)
@@ -200,6 +203,7 @@ async def _process_single_file(
                     revision_feedback=approval.feedback,
                     previous_plan=plan_data,
                     template_contents=template_contents or None,
+                    use_advanced_model=(validation.complexity == "complex"),
                 )
             except Exception as e:
                 logger.exception("Plan revision failed for %s", filename)
@@ -300,7 +304,7 @@ async def _process_single_file(
 
     # ── Done ─────────────────────────────────────────────────────────────
     warnings = []
-    if eval_results and eval_results[-1].overall_score < 0.8:
+    if eval_results and eval_results[-1].overall_score < 0.95:
         warnings.append(f"Final eval score {eval_results[-1].overall_score:.0%} below threshold")
     if eval_results and eval_results[-1].actionlint_passed is False:
         warnings.append(f"actionlint issues: {eval_results[-1].actionlint_output}")

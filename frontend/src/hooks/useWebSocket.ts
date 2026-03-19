@@ -38,6 +38,7 @@ export function useWebSocket(jobId: string | null): UseWebSocketReturn {
   const [pendingTemplateRequest, setPendingTemplateRequest] = useState<TemplateRequestMsg | null>(null);
   const [activeAgents, setActiveAgents] = useState<Map<string, AgentActivity>>(new Map());
   const agentTimersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
+  const agentStartTimesRef = useRef<Map<string, number>>(new Map());
   const [connected, setConnected] = useState(false);
 
   useEffect(() => {
@@ -115,14 +116,24 @@ export function useWebSocket(jobId: string | null): UseWebSocketReturn {
             filename: msg.filename,
             detail: msg.detail,
             target_file: msg.target_file,
+            timestamp: msg.timestamp || 0,
           };
 
-          // Clear any removal timer when agent restarts
+          // Track start times for duration calculation
           if (activity.status === "running") {
+            agentStartTimesRef.current.set(activity.agent_id, activity.timestamp || Date.now() / 1000);
             const existing = agentTimersRef.current.get(activity.agent_id);
             if (existing) {
               clearTimeout(existing);
               agentTimersRef.current.delete(activity.agent_id);
+            }
+          }
+
+          // For completed/error, keep the original start timestamp so the card shows total duration
+          if (activity.status !== "running") {
+            const startTs = agentStartTimesRef.current.get(activity.agent_id);
+            if (startTs) {
+              activity.timestamp = startTs;
             }
           }
 
@@ -143,6 +154,7 @@ export function useWebSocket(jobId: string | null): UseWebSocketReturn {
                 return next;
               });
               agentTimersRef.current.delete(activity.agent_id);
+              agentStartTimesRef.current.delete(activity.agent_id);
             }, activity.status === "completed" ? 2000 : 3000);
             agentTimersRef.current.set(activity.agent_id, timer);
           }
@@ -160,6 +172,7 @@ export function useWebSocket(jobId: string | null): UseWebSocketReturn {
         clearTimeout(timer);
       }
       agentTimersRef.current.clear();
+      agentStartTimesRef.current.clear();
     };
   }, [jobId]);
 

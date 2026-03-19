@@ -169,6 +169,7 @@ async def plan_migration(
     revision_feedback: str | None = None,
     previous_plan: dict | None = None,
     template_contents: list[dict[str, str]] | None = None,
+    use_advanced_model: bool = False,
 ) -> MigrationPlan:
     """Generate a migration plan from a source pipeline to GitHub Actions.
 
@@ -181,8 +182,15 @@ async def plan_migration(
         on_user_question: Async callback for human-in-the-loop questions.
         revision_feedback: User feedback for revising a previous plan.
         previous_plan: The previous plan JSON to revise.
+        template_contents: Template file contents referenced by the pipeline.
+        use_advanced_model: Use claude-sonnet-4.6 for complex pipelines.
     """
-    model = byok.model_name if byok else "openai/gpt-5.4-mini"
+    if byok:
+        model = byok.model_name
+    elif use_advanced_model:
+        model = "claude-sonnet-4.6"
+    else:
+        model = "openai/gpt-5.4-mini"
     system_prompt = _PROMPTS.get(pipeline_type, GENERIC_PROMPT)
     session_opts: dict = {
         "model": model,

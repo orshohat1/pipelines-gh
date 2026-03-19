@@ -14,12 +14,13 @@ from backend.models import PipelineType, ValidationResult
 logger = logging.getLogger(__name__)
 
 SYSTEM_MESSAGE = """You are a CI/CD pipeline file classifier. Your ONLY job is to determine
-which CI/CD platform a given pipeline file belongs to.
+which CI/CD platform a given pipeline file belongs to, and assess its complexity.
 
 Analyze the file content and return a JSON object with exactly these fields:
 {
   "pipeline_type": "azure-devops" | "jenkins" | "gitlab-ci" | "unknown",
   "confidence": 0.0 to 1.0,
+  "complexity": "simple" | "complex",
   "details": "Brief explanation of why you classified it this way"
 }
 
@@ -34,6 +35,14 @@ Classification rules:
   `artifacts:`, `cache:`, `services:`, `rules:`, `only:`, `except:`, `variables:` (with `$CI_`
   prefixed variables), `.gitlab-ci.yml` patterns, `extends:` for template inheritance.
 - **unknown**: If the file doesn't clearly match any of the above platforms.
+
+Complexity rules:
+- **complex**: Multiple stages/environments, template references, deployment steps, multi-stage
+  builds with deploy, matrix builds, conditional logic, extensive variable groups, service
+  connections/integrations, or more than 3 jobs/stages. Also complex if the pipeline has
+  infrastructure provisioning, approval gates, or artifact publishing across environments.
+- **simple**: Single stage or basic build-test, no deployments, no templates, 1-3 straightforward
+  jobs, no conditional branching, basic CI only.
 
 IMPORTANT:
 - Respond with ONLY valid JSON. No markdown, no explanation outside the JSON.
@@ -91,12 +100,14 @@ async def validate_pipeline(
                 pipeline_type=PipelineType.UNKNOWN,
                 confidence=0.0,
                 details=f"Failed to parse validator response: {raw[:200]}",
+                complexity="simple",
             )
 
         return ValidationResult(
             pipeline_type=PipelineType(data.get("pipeline_type", "unknown")),
             confidence=float(data.get("confidence", 0.0)),
             details=data.get("details", ""),
+            complexity=data.get("complexity", "simple"),
         )
     finally:
         sid = session.session_id

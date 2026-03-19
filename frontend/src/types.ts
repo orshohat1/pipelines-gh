@@ -108,6 +108,7 @@ export interface AgentActivity {
   filename: string;
   detail: string;
   target_file: string;
+  timestamp: number;
 }
 
 /** WebSocket message received from server (discriminated by "type"). */

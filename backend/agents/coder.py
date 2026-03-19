@@ -537,8 +537,8 @@ async def _refine_yaml(
 
 # ── Public API ───────────────────────────────────────────────────────────────
 
-SCORE_THRESHOLD = 0.8
-MAX_ITERATIONS = 2
+SCORE_THRESHOLD = 0.95
+MAX_ITERATIONS = 3
 
 
 async def generate_workflow(

@@ -36,6 +36,7 @@ class ValidationResult(BaseModel):
     pipeline_type: PipelineType
     confidence: float = Field(ge=0, le=1)
     details: str = ""
+    complexity: str = "simple"  # simple | complex
 
 
 # ---------- Planner output ----------
@@ -187,9 +188,10 @@ class MigrateResponse(BaseModel):
 class AgentActivity(BaseModel):
     """Real-time agent activity event for UI visualization."""
     agent_id: str
-    agent_type: str  # validator | planner | generator | evaluator | refiner | merge | actionlint
+    agent_type: str  # validator | planner | generator | evaluator | refiner | merge | actionlint | job-gen | assembler
     status: str  # running | completed | error
     file_id: str = ""
     filename: str = ""
     detail: str = ""
     target_file: str = ""
+    timestamp: float = 0.0
