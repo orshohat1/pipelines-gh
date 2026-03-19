@@ -6,6 +6,7 @@ relevant to the detected source CI/CD system, reducing prompt size and latency.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import re
@@ -55,31 +56,23 @@ Do NOT use escaped quotes (\\" ) as string delimiters — use plain double quote
 {
   "workflow_name": "string",
   "workflow_type": "standalone|reusable|composite",
-  "description": "2-3 sentences in plain English explaining what this workflow does, what it builds, and where it deploys. Written for a human reviewer, not a machine.",
+  "description": "2-3 sentence plain-English summary for a human reviewer.",
   "triggers": ["push", ...],
   "jobs": [{
     "name": "job-id", "display_name": "Human Name", "runs_on": "ubuntu-latest",
     "needs": [], "steps": [{"name":"...","uses":"...","run":"..."}],
     "environment": null, "permissions": {}
   }],
-  "output_files": [
-    {"filename": "deploy.yml", "file_type": "workflow|reusable|composite", "description": "...", "job_names": ["job-id-1"]}
-  ],
-  "prerequisites": [
-    {"what": "thing to create", "why": "reason it's needed", "how": "CLI command or portal step"}
-  ],
-  "enhancements": [
-    {"title": "short title", "description": "what this adds and why it matters"}
-  ],
+  "output_files": [{"filename": "deploy.yml", "file_type": "workflow|reusable|composite", "description": "...", "job_names": ["job-id-1"]}],
+  "prerequisites": [{"what": "...", "why": "...", "how": "CLI command or portal step"}],
+  "enhancements": [{"title": "short title", "description": "what + why"}],
   "warnings": [{"severity":"warning|critical","message":"..."}]
 }
 
-IMPORTANT:
-- "output_files" defines the set of GitHub Actions files to generate. For simple pipelines with no templates, use a single entry. When the source pipeline uses templates/includes, create a main workflow file AND a separate reusable workflow for EVERY template — including deployment/infrastructure templates, not just build templates. The main workflow should call reusable workflows with `uses: ./.github/workflows/filename.yml`. Each entry lists which jobs it contains via "job_names".
-- "prerequisites" lists things the user MUST create before the workflow can run (OIDC credentials, secrets, environments, etc.)
-- "enhancements" proposes best-practice upgrades beyond a 1:1 migration: splitting into multiple jobs, adding security scanning (CodeQL, dependency-review), artifact signing, environment protection rules, matrix builds, or anything that would make this a world-class GitHub Actions workflow. Be ambitious — propose 2-5 improvements.
-- When migrating variable groups, prefer GitHub ENVIRONMENT variables/secrets over repository-level variables for any value that is environment-specific (app names, resource groups, connection strings, etc.). Repository variables should only be used for values shared across ALL environments.
-- IMPORTANT: Distinguish between `secrets.*` and `vars.*` in steps. Non-sensitive configuration values (app names, resource groups, regions) MUST use `${{ vars.NAME }}`, NOT `${{ secrets.NAME }}`. Only truly sensitive values (credentials, tokens, passwords, client secrets) belong in secrets."""
+Rules:
+- "output_files": one entry per workflow file. Templates/includes → separate reusable workflow each. Main calls them via `uses: ./.github/workflows/filename.yml`.
+- "enhancements": propose 2-5 best-practice upgrades (job splitting, CodeQL, dependency-review, environment protection, matrix, artifact signing).
+- Use `secrets.*` ONLY for credentials; use `vars.*` for app names, regions, resource groups. Prefer environment-level over repo-level for env-specific values."""
 
 # ── Platform-specific planner prompts ────────────────────────────────────────
 
@@ -170,6 +163,72 @@ _PROMPTS: dict[PipelineType, str] = {
 }
 
 
+# ── Streaming helper ────────────────────────────────────────────────────────
+
+
+async def _send_with_streaming(
+    session: Any,
+    options: dict,
+    timeout: float = 300,
+) -> Any:
+    """Send a message using streaming events instead of send_and_wait.
+
+    Uses session.send() + on() to receive assistant.message_delta events.
+    The session stays alive as long as tokens are flowing — no idle-timeout
+    risk.  Falls back to send_and_wait if event subscription fails.
+    """
+    done: asyncio.Event = asyncio.Event()
+    collected_content: list[str] = []
+    final_event: list[Any] = []  # mutable container for the last event
+
+    def handler(event: Any) -> None:
+        etype = event.type.value if hasattr(event.type, "value") else str(event.type)
+
+        if etype == "assistant.message_delta":
+            delta = getattr(event.data, "content", "")
+            if delta:
+                collected_content.append(delta)
+
+        elif etype == "assistant.message":
+            # Full final message — prefer this over deltas if present
+            content = getattr(event.data, "content", "")
+            if content:
+                collected_content.clear()
+                collected_content.append(content)
+            final_event.append(event)
+
+        elif etype in ("session.idle", "assistant.turn_end"):
+            done.set()
+
+        elif etype == "session.error":
+            msg = getattr(event.data, "message", str(event.data))
+            logger.error("Planner session error: %s", msg)
+            done.set()
+
+    unsubscribe = session.on(handler)
+    try:
+        await session.send(options)
+        await asyncio.wait_for(done.wait(), timeout=timeout)
+    except asyncio.TimeoutError:
+        logger.warning("Planner streaming timed out after %ds", timeout)
+        raise
+    finally:
+        unsubscribe()
+
+    # Return a result object compatible with send_and_wait's return value
+    if final_event:
+        return final_event[0]
+
+    # Build a synthetic event from collected deltas
+    class _SyntheticData:
+        content = "".join(collected_content)
+
+    class _SyntheticEvent:
+        data = _SyntheticData()
+
+    return _SyntheticEvent()
+
+
 async def plan_migration(
     client: CopilotClient,
     filename: str,
@@ -205,6 +264,7 @@ async def plan_migration(
     system_prompt = _PROMPTS.get(pipeline_type, GENERIC_PROMPT)
     if _docs_context:
         system_prompt = f"{system_prompt}\n\n{_docs_context}"
+    logger.info("Planner system prompt: %d chars (model=%s)", len(system_prompt), model)
     session_opts: dict = {
         "model": model,
         "system_message": {"mode": "replace", "content": system_prompt},
@@ -257,7 +317,7 @@ async def plan_migration(
                 f"Filename: {filename}\n\n{content}"
                 f"{template_context}"
             )
-        response = await session.send_and_wait({"prompt": prompt}, timeout=180)
+        response = await _send_with_streaming(session, {"prompt": prompt}, timeout=300)
         raw = response.data.content if response else ""
 
         # Extract JSON from response — handle markdown fences and surrounding text

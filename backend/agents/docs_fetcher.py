@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 # ── Configuration ────────────────────────────────────────────────────────────
 
 _CACHE_TTL = 6 * 3600  # 6 hours
-_REQUEST_TIMEOUT = 15  # seconds per request
+_REQUEST_TIMEOUT = 5  # seconds per request (fallbacks available)
 
 # In-memory cache: key → (timestamp, data)
 _cache: dict[str, tuple[float, Any]] = {}
@@ -611,4 +611,88 @@ async def fetch_best_practices(pipeline_content: str = "") -> str:
     result = "\n".join(parts)
     _set_cached(cache_key, result)
     logger.info("Built best-practices reference: %d chars, topics: %s", len(result), topics_str)
+    return result
+
+
+# ── Planner-specific condensed reference ─────────────────────────────────────
+
+# One-line summaries per topic — no YAML code blocks, just enough for planning
+_PLANNER_SUMMARIES: dict[str, str] = {
+    "triggers": "Triggers: push/PR/schedule/workflow_dispatch with branch and path filters",
+    "permissions": "Permissions: default `contents: read` at workflow level; override per-job as needed; `id-token: write` for OIDC",
+    "concurrency": "Concurrency: use `concurrency.group` with `cancel-in-progress: true` for PRs, `false` for deploys",
+    "secrets_vars": "Secrets vs Vars: `secrets.*` for credentials only; `vars.*` for app names, regions, resource groups",
+    "expressions": "Expressions: `if:` conditionals, `$GITHUB_OUTPUT` for step outputs, `needs.<job>.outputs` for cross-job data",
+    "matrix": "Matrix: `strategy.matrix` for multi-OS/version testing with `fail-fast` and `exclude/include`",
+    "cache": "Caching: built-in via setup-node/setup-python `cache:` param; manual via `actions/cache` with `hashFiles()` keys",
+    "artifacts": "Artifacts: `upload-artifact`/`download-artifact` with `retention-days` for cross-job file sharing",
+    "deploy": "Deployment: use `environment:` with protection rules and required reviewers for production gates",
+    "azure": "Azure: OIDC via `azure/login` with workload identity federation (client-id, tenant-id, subscription-id)",
+    "aws": "AWS: OIDC via `aws-actions/configure-aws-credentials` with `role-to-assume`",
+    "gcp": "GCP: OIDC via `google-github-actions/auth` with workload identity provider",
+    "reusable": "Reusable Workflows: `on: workflow_call` with typed inputs/secrets; caller uses `uses: ./.github/workflows/file.yml`",
+    "docker": "Docker: `setup-buildx-action` → `login-action` → `build-push-action` for multi-platform builds",
+    "security": "Security: CodeQL for SAST, `dependency-review-action` on PRs, container scanning with Trivy",
+}
+
+
+async def fetch_planner_summary(pipeline_content: str = "") -> str:
+    """Fetch a condensed GitHub Actions reference for the planner agent.
+
+    Returns action versions table + one-line topic bullets (~2KB) instead of
+    the full YAML-heavy reference (~15KB) used by the coder. The planner
+    outputs JSON plans, not YAML — it only needs to know *what* actions and
+    capabilities exist, not their exact YAML syntax.
+    """
+    detected = detect_topics(pipeline_content) if pipeline_content else set()
+    all_topics = _CORE_TOPICS | detected
+
+    # Build cache key (separate from coder's "bp:" namespace)
+    cache_key = "bp-plan:" + ",".join(sorted(all_topics))
+    cached = _get_cached(cache_key)
+    if cached is not None:
+        return cached
+
+    # Reuse the coder's version cache if available, otherwise use fallbacks
+    versions_cache = _get_cached("action_versions")
+    if versions_cache:
+        versions = versions_cache
+    else:
+        versions = dict(TRACKED_ACTIONS)
+
+    # Filter to only relevant actions
+    relevant_actions: dict[str, str] = {
+        "actions/checkout": versions.get("actions/checkout", TRACKED_ACTIONS["actions/checkout"]),
+    }
+    for topic_key in detected:
+        topic_info = _TOPICS.get(topic_key, {})
+        for action in topic_info.get("actions", []):
+            if action in versions:
+                relevant_actions[action] = versions[action]
+            elif action in TRACKED_ACTIONS:
+                relevant_actions[action] = TRACKED_ACTIONS[action]
+
+    # Build condensed reference
+    parts: list[str] = [
+        "# GitHub Actions Reference (planning summary)\n",
+        "## Action Versions\n",
+        "| Action | Version |",
+        "|--------|---------|"]
+    for action, version in sorted(relevant_actions.items()):
+        parts.append(f"| `{action}` | `@{version}` |")
+    parts.append("")
+
+    parts.append("## Capabilities\n")
+    for topic_key in sorted(all_topics):
+        summary = _PLANNER_SUMMARIES.get(topic_key)
+        if summary:
+            parts.append(f"- {summary}")
+    parts.append("")
+
+    topics_str = ", ".join(sorted(detected)) if detected else "none"
+    parts.append(f"<!-- planner topics: {topics_str} -->")
+
+    result = "\n".join(parts)
+    _set_cached(cache_key, result)
+    logger.info("Built planner summary: %d chars, topics: %s", len(result), topics_str)
     return result

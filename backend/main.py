@@ -12,6 +12,7 @@ from pydantic import BaseModel
 from fastapi.middleware.cors import CORSMiddleware
 
 from backend.agents.orchestrator import run_migration
+from backend.agents.docs_fetcher import fetch_best_practices
 from backend.config import BYOKProviderConfig, settings
 from backend.models import BYOKConfigRequest, MigrateResponse, MigrationResult
 from backend.websocket import manager
@@ -20,6 +21,16 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name
 logger = logging.getLogger(__name__)
 
 app = FastAPI(title="Pipeline Migration Service", version="0.1.0")
+
+
+@app.on_event("startup")
+async def _warm_docs_cache() -> None:
+    """Pre-warm the action-version cache so the first migration is fast."""
+    try:
+        docs = await fetch_best_practices("")  # core topics only
+        logger.info("Docs cache warmed on startup (%d chars)", len(docs))
+    except Exception as e:
+        logger.warning("Docs cache warm failed (non-blocking): %s", e)
 
 app.add_middleware(
     CORSMiddleware,

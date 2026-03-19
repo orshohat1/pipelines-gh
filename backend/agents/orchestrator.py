@@ -14,7 +14,7 @@ from copilot import CopilotClient
 
 from backend.agents.coder import generate_workflow, generate_workflows_parallel
 from backend.agents.coder import set_docs_context as set_coder_docs
-from backend.agents.docs_fetcher import fetch_best_practices
+from backend.agents.docs_fetcher import fetch_best_practices, fetch_planner_summary
 from backend.agents.planner import plan_migration
 from backend.agents.planner import set_docs_context as set_planner_docs
 from backend.agents.validator import validate_pipeline
@@ -101,16 +101,20 @@ async def _process_single_file(
     await emit_agent("validator", "running", "Detecting pipeline type...")
 
     # Fetch topic-aware best practices in parallel with validation
-    async def _fetch_docs() -> str:
+    async def _fetch_docs() -> None:
         try:
-            docs = await fetch_best_practices(content)
-            set_coder_docs(docs)
-            set_planner_docs(docs)
-            logger.info("Loaded best-practices reference (%d chars) for %s", len(docs), filename)
-            return docs
+            planner_docs, coder_docs = await asyncio.gather(
+                fetch_planner_summary(content),
+                fetch_best_practices(content),
+            )
+            set_planner_docs(planner_docs)
+            set_coder_docs(coder_docs)
+            logger.info(
+                "Loaded docs for %s — planner: %d chars, coder: %d chars",
+                filename, len(planner_docs), len(coder_docs),
+            )
         except Exception as e:
             logger.warning("Could not fetch best-practices docs for %s: %s", filename, e)
-            return ""
 
     docs_task = asyncio.create_task(_fetch_docs())
 
