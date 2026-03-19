@@ -6,11 +6,9 @@ relevant to the detected source CI/CD system, reducing prompt size and latency.
 
 from __future__ import annotations
 
-import asyncio
 import json
 import logging
 import re
-import tempfile
 from typing import Any, Callable, Coroutine
 
 from copilot import CopilotClient, PermissionHandler
@@ -163,72 +161,6 @@ _PROMPTS: dict[PipelineType, str] = {
 }
 
 
-# ── Streaming helper ────────────────────────────────────────────────────────
-
-
-async def _send_with_streaming(
-    session: Any,
-    options: dict,
-    timeout: float = 300,
-) -> Any:
-    """Send a message using streaming events instead of send_and_wait.
-
-    Uses session.send() + on() to receive assistant.message_delta events.
-    The session stays alive as long as tokens are flowing — no idle-timeout
-    risk.  Falls back to send_and_wait if event subscription fails.
-    """
-    done: asyncio.Event = asyncio.Event()
-    collected_content: list[str] = []
-    final_event: list[Any] = []  # mutable container for the last event
-
-    def handler(event: Any) -> None:
-        etype = event.type.value if hasattr(event.type, "value") else str(event.type)
-
-        if etype == "assistant.message_delta":
-            delta = getattr(event.data, "content", "")
-            if delta:
-                collected_content.append(delta)
-
-        elif etype == "assistant.message":
-            # Full final message — prefer this over deltas if present
-            content = getattr(event.data, "content", "")
-            if content:
-                collected_content.clear()
-                collected_content.append(content)
-            final_event.append(event)
-
-        elif etype in ("session.idle", "assistant.turn_end"):
-            done.set()
-
-        elif etype == "session.error":
-            msg = getattr(event.data, "message", str(event.data))
-            logger.error("Planner session error: %s", msg)
-            done.set()
-
-    unsubscribe = session.on(handler)
-    try:
-        await session.send(options)
-        await asyncio.wait_for(done.wait(), timeout=timeout)
-    except asyncio.TimeoutError:
-        logger.warning("Planner streaming timed out after %ds", timeout)
-        raise
-    finally:
-        unsubscribe()
-
-    # Return a result object compatible with send_and_wait's return value
-    if final_event:
-        return final_event[0]
-
-    # Build a synthetic event from collected deltas
-    class _SyntheticData:
-        content = "".join(collected_content)
-
-    class _SyntheticEvent:
-        data = _SyntheticData()
-
-    return _SyntheticEvent()
-
-
 async def plan_migration(
     client: CopilotClient,
     filename: str,
@@ -257,8 +189,6 @@ async def plan_migration(
     """
     if byok:
         model = byok.model_name
-    elif use_advanced_model:
-        model = "claude-sonnet-4.6"
     else:
         model = "openai/gpt-5.4-mini"
     system_prompt = _PROMPTS.get(pipeline_type, GENERIC_PROMPT)
@@ -317,8 +247,9 @@ async def plan_migration(
                 f"Filename: {filename}\n\n{content}"
                 f"{template_context}"
             )
-        response = await _send_with_streaming(session, {"prompt": prompt}, timeout=300)
+        response = await session.send_and_wait({"prompt": prompt}, timeout=600)
         raw = response.data.content if response else ""
+        logger.info("Planner raw response length: %d chars", len(raw))
 
         # Extract JSON from response — handle markdown fences and surrounding text
         text = raw.strip()
