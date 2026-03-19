@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 import shutil
 import subprocess
 import tempfile
@@ -13,6 +14,15 @@ from pathlib import Path
 from copilot import CopilotClient, PermissionHandler
 
 PROJECT_ROOT = str(Path(__file__).resolve().parents[2])
+
+# Temp config dir with symlink to .github so SDK finds agent.md
+# without writing any state to the project directory.
+_CONFIG_DIR = tempfile.mkdtemp(prefix="copilot-config-")
+_GITHUB_SRC = Path(PROJECT_ROOT) / ".github"
+_GITHUB_LINK = Path(_CONFIG_DIR) / ".github"
+if _GITHUB_SRC.exists() and not _GITHUB_LINK.exists():
+    import os
+    os.symlink(_GITHUB_SRC, _GITHUB_LINK)
 
 from backend.config import BYOKProviderConfig, settings
 from backend.models import EvalDimension, EvalResult, MigrationPlan, PipelineType
@@ -117,7 +127,7 @@ async def _generate_yaml(
         "model": model,
         "system_message": {"mode": "append", "content": GENERATOR_SYSTEM},
         "on_permission_request": PermissionHandler.approve_all,
-        "config_dir": PROJECT_ROOT,
+        "config_dir": _CONFIG_DIR,
     }
     provider = byok.to_sdk_provider() if byok else None
     if provider:
@@ -136,7 +146,10 @@ async def _generate_yaml(
 
         # Strip markdown fences if present
         text = raw.strip()
-        if text.startswith("```"):
+        fence_match = re.search(r"```(?:ya?ml)?\s*\n?(.*?)```", text, re.DOTALL)
+        if fence_match:
+            text = fence_match.group(1).strip()
+        elif text.startswith("```"):
             first_newline = text.index("\n") if "\n" in text else 3
             text = text[first_newline + 1 :]
             if text.endswith("```"):
@@ -166,7 +179,7 @@ async def _evaluate_yaml(
         "model": model,
         "system_message": {"mode": "append", "content": EVALUATOR_SYSTEM},
         "on_permission_request": PermissionHandler.approve_all,
-        "config_dir": PROJECT_ROOT,
+        "config_dir": _CONFIG_DIR,
     }
     provider = byok.to_sdk_provider() if byok else None
     if provider:
@@ -194,11 +207,14 @@ async def _evaluate_yaml(
 
     # Parse LLM evaluation
     text = raw.strip()
-    if text.startswith("```"):
-        text = text.split("\n", 1)[1] if "\n" in text else text[3:]
-        if text.endswith("```"):
-            text = text[:-3]
-        text = text.strip()
+    fence_match = re.search(r"```(?:json)?\s*\n?(.*?)```", text, re.DOTALL)
+    if fence_match:
+        text = fence_match.group(1).strip()
+    else:
+        brace_start = text.find("{")
+        brace_end = text.rfind("}")
+        if brace_start != -1 and brace_end > brace_start:
+            text = text[brace_start : brace_end + 1]
 
     try:
         data = json.loads(text)
@@ -256,7 +272,7 @@ async def _refine_yaml(
         "model": model,
         "system_message": {"mode": "append", "content": REFINER_SYSTEM},
         "on_permission_request": PermissionHandler.approve_all,
-        "config_dir": PROJECT_ROOT,
+        "config_dir": _CONFIG_DIR,
     }
     provider = byok.to_sdk_provider() if byok else None
     if provider:

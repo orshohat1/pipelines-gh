@@ -12,6 +12,9 @@ frontend/dist/
 
 .vite/
 
+# Copilot SDK (should go to /tmp, but just in case)
+session-state/
+
 # Environment
 .env
 *.local

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
-from pathlib import Path
+import re
 
 from copilot import CopilotClient, PermissionHandler
 
@@ -12,8 +12,6 @@ from backend.config import BYOKProviderConfig
 from backend.models import PipelineType, ValidationResult
 
 logger = logging.getLogger(__name__)
-
-PROJECT_ROOT = str(Path(__file__).resolve().parents[2])
 
 SYSTEM_MESSAGE = """You are a CI/CD pipeline file classifier. Your ONLY job is to determine
 which CI/CD platform a given pipeline file belongs to.
@@ -59,7 +57,6 @@ async def validate_pipeline(
         "model": model,
         "system_message": {"mode": "replace", "content": SYSTEM_MESSAGE},
         "on_permission_request": PermissionHandler.approve_all,
-        "config_dir": PROJECT_ROOT,
     }
     provider = byok.to_sdk_provider() if byok else None
     if provider:
@@ -75,13 +72,16 @@ async def validate_pipeline(
         response = await session.send_and_wait({"prompt": prompt}, timeout=120)
         raw = response.data.content if response else ""
 
-        # Parse JSON from the response — strip markdown fences if present
+        # Parse JSON from the response — handle markdown fences and surrounding text
         text = raw.strip()
-        if text.startswith("```"):
-            text = text.split("\n", 1)[1] if "\n" in text else text[3:]
-            if text.endswith("```"):
-                text = text[:-3]
-            text = text.strip()
+        fence_match = re.search(r"```(?:json)?\s*\n?(.*?)```", text, re.DOTALL)
+        if fence_match:
+            text = fence_match.group(1).strip()
+        else:
+            brace_start = text.find("{")
+            brace_end = text.rfind("}")
+            if brace_start != -1 and brace_end > brace_start:
+                text = text[brace_start : brace_end + 1]
 
         try:
             data = json.loads(text)

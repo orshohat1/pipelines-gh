@@ -8,8 +8,8 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import tempfile
-from pathlib import Path
 from typing import Any, Callable, Coroutine
 
 from copilot import CopilotClient, PermissionHandler
@@ -18,8 +18,6 @@ from backend.config import BYOKProviderConfig
 from backend.models import MigrationPlan, PipelineType
 
 logger = logging.getLogger(__name__)
-
-PROJECT_ROOT = str(Path(__file__).resolve().parents[2])
 
 # ── Shared preamble & JSON schema ────────────────────────────────────────────
 
@@ -176,7 +174,6 @@ async def plan_migration(
         "model": model,
         "system_message": {"mode": "replace", "content": system_prompt},
         "on_permission_request": PermissionHandler.approve_all,
-        "config_dir": PROJECT_ROOT,
     }
     provider = byok.to_sdk_provider() if byok else None
     if provider:
@@ -212,18 +209,24 @@ async def plan_migration(
         response = await session.send_and_wait({"prompt": prompt}, timeout=180)
         raw = response.data.content if response else ""
 
-        # Parse JSON
+        # Extract JSON from response — handle markdown fences and surrounding text
         text = raw.strip()
-        if text.startswith("```"):
-            text = text.split("\n", 1)[1] if "\n" in text else text[3:]
-            if text.endswith("```"):
-                text = text[:-3]
-            text = text.strip()
+
+        # Strip markdown fences (```json ... ``` or ``` ... ```)
+        fence_match = re.search(r"```(?:json)?\s*\n?(.*?)```", text, re.DOTALL)
+        if fence_match:
+            text = fence_match.group(1).strip()
+        else:
+            # No fences — try to find the outermost JSON object
+            brace_start = text.find("{")
+            brace_end = text.rfind("}")
+            if brace_start != -1 and brace_end > brace_start:
+                text = text[brace_start : brace_end + 1]
 
         try:
             data = json.loads(text)
         except json.JSONDecodeError:
-            logger.warning("Planner returned non-JSON, using raw text as plan.")
+            logger.warning("Planner returned non-JSON: %s", raw[:300])
             return MigrationPlan(raw_plan=raw)
 
         return MigrationPlan(
