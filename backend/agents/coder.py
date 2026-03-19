@@ -29,6 +29,24 @@ from backend.models import EvalDimension, EvalResult, GeneratedFile, MigrationPl
 
 logger = logging.getLogger(__name__)
 
+# ── Docs context (set by orchestrator at runtime) ────────────────────────────
+
+_docs_context: str = ""
+
+
+def set_docs_context(ctx: str) -> None:
+    """Set the GitHub Actions best-practices reference for all agents."""
+    global _docs_context
+    _docs_context = ctx
+
+
+def _system(base: str) -> str:
+    """Append live docs context to a system message."""
+    if _docs_context:
+        return f"{base}\n\n{_docs_context}"
+    return base
+
+
 # ── System messages ──────────────────────────────────────────────────────────
 
 GENERATOR_SYSTEM = """Generate a complete, production-ready GitHub Actions YAML workflow file
@@ -178,7 +196,7 @@ async def _generate_single_job(
     model = byok.model_name if byok else "claude-sonnet-4.6"
     session_opts: dict = {
         "model": model,
-        "system_message": {"mode": "append", "content": JOB_GENERATOR_SYSTEM},
+        "system_message": {"mode": "append", "content": _system(JOB_GENERATOR_SYSTEM)},
         "on_permission_request": PermissionHandler.approve_all,
         "config_dir": _CONFIG_DIR,
     }
@@ -326,7 +344,7 @@ async def _generate_yaml(
     model = byok.model_name if byok else "claude-sonnet-4.6"
     session_opts: dict = {
         "model": model,
-        "system_message": {"mode": "append", "content": GENERATOR_SYSTEM},
+        "system_message": {"mode": "append", "content": _system(GENERATOR_SYSTEM)},
         "on_permission_request": PermissionHandler.approve_all,
         "config_dir": _CONFIG_DIR,
     }
@@ -397,7 +415,7 @@ async def _evaluate_yaml(
     model = byok.model_name if byok else "openai/gpt-5.4-mini"
     session_opts: dict = {
         "model": model,
-        "system_message": {"mode": "append", "content": EVALUATOR_SYSTEM},
+        "system_message": {"mode": "append", "content": _system(EVALUATOR_SYSTEM)},
         "on_permission_request": PermissionHandler.approve_all,
         "config_dir": _CONFIG_DIR,
     }
@@ -494,7 +512,7 @@ async def _refine_yaml(
     model = byok.model_name if byok else "claude-sonnet-4.6"
     session_opts: dict = {
         "model": model,
-        "system_message": {"mode": "append", "content": REFINER_SYSTEM},
+        "system_message": {"mode": "append", "content": _system(REFINER_SYSTEM)},
         "on_permission_request": PermissionHandler.approve_all,
         "config_dir": _CONFIG_DIR,
     }

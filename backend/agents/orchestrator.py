@@ -13,7 +13,10 @@ from typing import Any, Callable, Coroutine
 from copilot import CopilotClient
 
 from backend.agents.coder import generate_workflow, generate_workflows_parallel
+from backend.agents.coder import set_docs_context as set_coder_docs
+from backend.agents.docs_fetcher import fetch_best_practices
 from backend.agents.planner import plan_migration
+from backend.agents.planner import set_docs_context as set_planner_docs
 from backend.agents.validator import validate_pipeline
 from backend.config import BYOKProviderConfig, settings
 from backend.models import (
@@ -356,6 +359,15 @@ async def run_migration(
     """
     client = CopilotClient({"cwd": tempfile.mkdtemp(prefix="copilot-")})
     await client.start()
+
+    # Fetch latest GitHub Actions best practices and inject into agents
+    try:
+        docs = await fetch_best_practices()
+        set_coder_docs(docs)
+        set_planner_docs(docs)
+        logger.info("Loaded GitHub Actions best-practices reference (%d chars)", len(docs))
+    except Exception as e:
+        logger.warning("Could not fetch best-practices docs: %s", e)
 
     semaphore = asyncio.Semaphore(settings.max_concurrent_pipelines)
 

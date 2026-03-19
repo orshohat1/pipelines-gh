@@ -19,6 +19,17 @@ from backend.models import MigrationPlan, PipelineType
 
 logger = logging.getLogger(__name__)
 
+# ── Docs context (set by orchestrator at runtime) ────────────────────────────
+
+_docs_context: str = ""
+
+
+def set_docs_context(ctx: str) -> None:
+    """Set the GitHub Actions best-practices reference for the planner."""
+    global _docs_context
+    _docs_context = ctx
+
+
 # ── Shared preamble & JSON schema ────────────────────────────────────────────
 
 _SECURITY_RULES = """\
@@ -192,6 +203,8 @@ async def plan_migration(
     else:
         model = "openai/gpt-5.4-mini"
     system_prompt = _PROMPTS.get(pipeline_type, GENERIC_PROMPT)
+    if _docs_context:
+        system_prompt = f"{system_prompt}\n\n{_docs_context}"
     session_opts: dict = {
         "model": model,
         "system_message": {"mode": "replace", "content": system_prompt},
