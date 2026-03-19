@@ -10,8 +10,6 @@ build/
 node_modules/
 frontend/dist/
 
-# Copilot SDK session state
-session-state/
 .vite/
 
 # Environment

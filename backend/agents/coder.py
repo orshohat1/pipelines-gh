@@ -27,6 +27,10 @@ based on the provided migration plan and source pipeline.
 Apply all GitHub Actions best practices from your knowledge base (action pinning, permissions,
 caching, concurrency, secrets handling, OIDC, supply-chain security).
 
+IMPORTANT: Use `${{ secrets.NAME }}` ONLY for sensitive credentials (client IDs, client secrets,
+passwords, tokens). Use `${{ vars.NAME }}` via env of pipeline for non-sensitive configuration (app names, resource
+groups, regions, slot names, URLs). Never put non-sensitive config in secrets.
+
 Output ONLY the raw YAML content. No markdown fences, no explanation. Start with `name:`.
 """
 

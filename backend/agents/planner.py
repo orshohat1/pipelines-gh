@@ -27,7 +27,8 @@ _SECURITY_RULES = """\
 Security rules (apply to every workflow):
 - Default `permissions: contents: read` at workflow level
 - Pin actions to major version tags (e.g. `@v4`), never `@main`/`@latest`
-- Secrets via `${{ secrets.NAME }}` only; prefer OIDC over long-lived creds
+- Sensitive credentials via `${{ secrets.NAME }}`; non-sensitive config (app names, resource groups, regions, URLs) via `${{ vars.NAME }}`
+- Prefer OIDC over long-lived creds
 - Include `concurrency` groups for deployment workflows
 - Use built-in caching and set `retention-days` on artifacts"""
 
@@ -56,7 +57,8 @@ Return ONLY a valid JSON object (no markdown, no fences, no extra text).
 IMPORTANT:
 - "prerequisites" lists things the user MUST create before the workflow can run (OIDC credentials, secrets, environments, etc.)
 - "enhancements" proposes best-practice upgrades beyond a 1:1 migration: splitting into multiple jobs, adding security scanning (CodeQL, dependency-review), artifact signing, environment protection rules, matrix builds, or anything that would make this a world-class GitHub Actions workflow. Be ambitious — propose 2-5 improvements.
-- When migrating variable groups, prefer GitHub ENVIRONMENT variables/secrets over repository-level variables for any value that is environment-specific (app names, resource groups, connection strings, etc.). Repository variables should only be used for values shared across ALL environments."""
+- When migrating variable groups, prefer GitHub ENVIRONMENT variables/secrets over repository-level variables for any value that is environment-specific (app names, resource groups, connection strings, etc.). Repository variables should only be used for values shared across ALL environments.
+- IMPORTANT: Distinguish between `secrets.*` and `vars.*` in steps. Non-sensitive configuration values (app names, resource groups, regions) MUST use `${{ vars.NAME }}`, NOT `${{ secrets.NAME }}`. Only truly sensitive values (credentials, tokens, passwords, client secrets) belong in secrets."""
 
 # ── Platform-specific planner prompts ────────────────────────────────────────
 
@@ -73,7 +75,10 @@ Key mappings:
 - `$(Build.SourceBranch)` → `${{{{ github.ref }}}}`
 - `$(System.AccessToken)` → `${{{{ secrets.GITHUB_TOKEN }}}}`
 - Service connections → OIDC via `azure/login@v2`
-- Variable groups → GitHub environment secrets/variables (prefer environment-scoped vars over repository-level vars for environment-specific values like app names, resource groups, etc.)
+- Variable groups → GitHub environment secrets/variables:
+  * Sensitive values (client IDs, secrets, passwords, tokens, connection strings) → `${{ secrets.NAME }}`
+  * Non-sensitive config (app names, resource groups, regions, slot names, URLs) → `${{ vars.NAME }}`
+  * Prefer environment-scoped over repository-level for environment-specific values
 - Template refs → reusable workflows or composite actions
 - `dependsOn:` → `needs:`
 - Environments + approvals → environments + protection rules

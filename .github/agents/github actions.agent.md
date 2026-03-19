@@ -47,9 +47,10 @@ Before creating or modifying workflows:
 - Never use `@main` or `@latest`
 
 **Secrets**:
-- Access via environment variables only
+- Sensitive credentials via `${{ secrets.NAME }}` (client IDs, passwords, tokens, connection strings)
+- Non-sensitive config via `${{ vars.NAME }}` in the pipeline env config (app names, resource groups, regions, slot names, URLs)
 - Never log or expose in outputs
-- Use environment-specific secrets for production
+- Use environment-specific secrets/vars for production
 - Prefer OIDC over long-lived credentials
 
 ## OIDC Authentication
