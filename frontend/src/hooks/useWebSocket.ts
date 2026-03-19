@@ -16,7 +16,7 @@ interface UseWebSocketReturn {
   /** Send an answer to a HITL question. */
   answerQuestion: (questionId: string, answer: string) => void;
   /** Send a plan approval response. */
-  approvePlan: (fileId: string, approved: boolean, feedback?: string) => void;
+  approvePlan: (fileId: string, approved: boolean, feedback?: string, revise?: boolean) => void;
   /** Whether the WebSocket is connected. */
   connected: boolean;
 }
@@ -57,6 +57,7 @@ export function useWebSocket(jobId: string | null): UseWebSocketReturn {
               stage: msg.stage,
               message: msg.message,
               data: msg.data,
+              validationData: msg.stage === "validated" ? msg.data : existing?.validationData,
               yaml: msg.stage === "completed" ? (msg.data?.yaml as string | undefined) ?? existing?.yaml : existing?.yaml,
               warnings: msg.stage === "completed" ? (msg.data?.warnings as string[] | undefined) ?? existing?.warnings : existing?.warnings,
             };
@@ -102,10 +103,13 @@ export function useWebSocket(jobId: string | null): UseWebSocketReturn {
   );
 
   const approvePlan = useCallback(
-    (fileId: string, approved: boolean, feedback = "") => {
+    (fileId: string, approved: boolean, feedback = "", revise = false) => {
       wsRef.current?.send(
-        JSON.stringify({ type: "plan_approval", file_id: fileId, approved, feedback }),
+        JSON.stringify({ type: "plan_approval", file_id: fileId, approved, feedback, revise }),
       );
+      // Always close the modal — if revising, the user will see
+      // "Revising plan: ..." in the status card, and a new modal
+      // will open when the revised plan arrives.
       setPendingApproval(null);
     },
     [],

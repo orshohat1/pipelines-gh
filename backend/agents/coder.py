@@ -21,65 +21,39 @@ logger = logging.getLogger(__name__)
 
 # ── System messages ──────────────────────────────────────────────────────────
 
-GENERATOR_SYSTEM = """You are an expert GitHub Actions workflow author. Generate a complete,
-production-ready GitHub Actions YAML workflow file.
+GENERATOR_SYSTEM = """Generate a complete, production-ready GitHub Actions YAML workflow file
+based on the provided migration plan and source pipeline.
 
-STRICT RULES — every workflow you generate MUST:
-1. Start with `name:` and include descriptive workflow name
-2. Use `permissions:` at workflow level defaulting to `contents: read`
-3. Pin all actions to specific major version tags (e.g. `actions/checkout@v4`), NEVER `@main`
-4. Use `${{ secrets.NAME }}` for all secrets — never hardcode credentials
-5. Include `concurrency:` configuration for deployment workflows
-6. Use caching where appropriate (setup-node cache, setup-python cache, actions/cache)
-7. Set artifact retention with `retention-days` where applicable
-8. Use `env:` blocks for shared environment variables
-9. Use `needs:` to express job dependencies
-10. Include appropriate `if:` conditions for conditional execution
-11. Use `runs-on: ubuntu-latest` unless the plan specifies otherwise
+Apply all GitHub Actions best practices from your knowledge base (action pinning, permissions,
+caching, concurrency, secrets handling, OIDC, supply-chain security).
 
-Output ONLY the raw YAML content. No markdown fences, no explanation. Just valid YAML starting
-with `name:`.
+Output ONLY the raw YAML content. No markdown fences, no explanation. Start with `name:`.
 """
 
-EVALUATOR_SYSTEM = """You are a GitHub Actions workflow quality evaluator. Given a generated
-GitHub Actions YAML workflow, evaluate it against this rubric.
+EVALUATOR_SYSTEM = """Evaluate the given GitHub Actions YAML workflow against the best-practices
+checklist in your knowledge base. Score each dimension 0.0-1.0, mark PASS (>= 0.7) or FAIL:
 
-Score each dimension 0.0-1.0 and mark PASS (>= 0.7) or FAIL (< 0.7):
-
-1. **yaml_syntax**: Is the YAML syntactically valid? Proper indentation, no missing colons,
-   correct list formatting. This is the most critical dimension.
-2. **action_pinning**: Are ALL actions pinned to specific versions (@v4 etc.)? Are any using
-   @main, @latest, or missing version tags? Deduct heavily for unpinned actions.
-3. **permissions**: Is `permissions:` configured? Does it default to `contents: read`?
-   Are job-level permissions overriding only when needed?
-4. **secrets_handling**: Are secrets accessed via `${{ secrets.* }}`? No hardcoded credentials?
-   Environment variables used appropriately?
-5. **trigger_config**: Do the triggers match the migration plan? Are branch filters correct?
-6. **completeness**: Are all jobs/steps from the migration plan present? Any missing stages?
-7. **best_practices**: Concurrency control? Caching? Artifact retention? Job dependencies
-   with `needs:`? Conditional execution with `if:`?
+1. **yaml_syntax** — valid YAML, correct indentation and structure
+2. **action_pinning** — ALL actions pinned to major versions, never @main/@latest
+3. **permissions** — least privilege, `contents: read` default, job-level overrides only
+4. **secrets_handling** — `${{ secrets.* }}` only, OIDC preferred, no hardcoded creds
+5. **trigger_config** — triggers match the migration plan
+6. **completeness** — all planned jobs/steps present
+7. **best_practices** — concurrency, caching, artifact retention, dependencies, conditionals
 
 Return ONLY valid JSON:
 {
   "overall_score": 0.0-1.0,
   "dimensions": [
-    {"name": "yaml_syntax", "score": 0.0-1.0, "status": "PASS|FAIL", "feedback": "..."},
-    {"name": "action_pinning", "score": 0.0-1.0, "status": "PASS|FAIL", "feedback": "..."},
-    {"name": "permissions", "score": 0.0-1.0, "status": "PASS|FAIL", "feedback": "..."},
-    {"name": "secrets_handling", "score": 0.0-1.0, "status": "PASS|FAIL", "feedback": "..."},
-    {"name": "trigger_config", "score": 0.0-1.0, "status": "PASS|FAIL", "feedback": "..."},
-    {"name": "completeness", "score": 0.0-1.0, "status": "PASS|FAIL", "feedback": "..."},
-    {"name": "best_practices", "score": 0.0-1.0, "status": "PASS|FAIL", "feedback": "..."}
+    {"name": "...", "score": 0.0-1.0, "status": "PASS|FAIL", "feedback": "..."}
   ]
 }
 """
 
-REFINER_SYSTEM = """You are a GitHub Actions workflow fixer. You will receive a workflow YAML
-that failed evaluation, along with the evaluation feedback. Fix ALL issues identified in the
-feedback while preserving the workflow's functionality.
+REFINER_SYSTEM = """Fix ALL issues identified in the evaluation feedback while preserving
+the workflow's functionality. Apply GitHub Actions best practices from your knowledge base.
 
-Output ONLY the corrected raw YAML content. No markdown fences, no explanation.
-Start directly with `name:`.
+Output ONLY the corrected raw YAML content. No markdown fences. Start with `name:`.
 """
 
 
@@ -137,7 +111,7 @@ async def _generate_yaml(
     model = byok.model_name if byok else "claude-sonnet-4.6"
     session_opts: dict = {
         "model": model,
-        "system_message": {"mode": "replace", "content": GENERATOR_SYSTEM},
+        "system_message": {"mode": "append", "content": GENERATOR_SYSTEM},
         "on_permission_request": PermissionHandler.approve_all,
         "config_dir": PROJECT_ROOT,
     }
@@ -186,7 +160,7 @@ async def _evaluate_yaml(
     model = byok.model_name if byok else "claude-sonnet-4.6"
     session_opts: dict = {
         "model": model,
-        "system_message": {"mode": "replace", "content": EVALUATOR_SYSTEM},
+        "system_message": {"mode": "append", "content": EVALUATOR_SYSTEM},
         "on_permission_request": PermissionHandler.approve_all,
         "config_dir": PROJECT_ROOT,
     }
@@ -276,7 +250,7 @@ async def _refine_yaml(
     model = byok.model_name if byok else "claude-sonnet-4.6"
     session_opts: dict = {
         "model": model,
-        "system_message": {"mode": "replace", "content": REFINER_SYSTEM},
+        "system_message": {"mode": "append", "content": REFINER_SYSTEM},
         "on_permission_request": PermissionHandler.approve_all,
         "config_dir": PROJECT_ROOT,
     }

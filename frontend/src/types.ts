@@ -68,6 +68,8 @@ export interface PipelineFile {
   stage: Stage;
   message: string;
   data?: Record<string, unknown> | null;
+  /** Preserved validation data (pipeline_type, confidence, details). */
+  validationData?: Record<string, unknown> | null;
   yaml?: string;
   warnings?: string[];
 }

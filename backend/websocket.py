@@ -162,6 +162,7 @@ class ConnectionManager:
                     file_id=data.get("file_id", ""),
                     approved=data.get("approved", False),
                     feedback=data.get("feedback", ""),
+                    revise=data.get("revise", False),
                 )
             )
         else:

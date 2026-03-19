@@ -51,16 +51,26 @@ class PlanWarning(BaseModel):
     message: str
 
 
+class Prerequisite(BaseModel):
+    what: str  # e.g. "OIDC federated identity credential"
+    why: str  # e.g. "Required for keyless Azure login via azure/login@v2"
+    how: str = ""  # e.g. "az ad app federated-credential create ..."
+
+
+class Enhancement(BaseModel):
+    title: str  # e.g. "Add dependency review"
+    description: str  # what it does and why
+
+
 class MigrationPlan(BaseModel):
     workflow_name: str = ""
     workflow_type: str = ""  # standalone | reusable | composite
+    description: str = ""  # plain English summary of what the workflow will do
     triggers: list[str] = Field(default_factory=list)
     jobs: list[dict[str, Any]] = Field(default_factory=list)
-    secrets_required: list[SecretDependency] = Field(default_factory=list)
-    environment_variables: list[dict[str, str]] = Field(default_factory=list)
-    recommended_actions: list[dict[str, str]] = Field(default_factory=list)
+    prerequisites: list[Prerequisite] = Field(default_factory=list)
+    enhancements: list[Enhancement] = Field(default_factory=list)
     warnings: list[PlanWarning] = Field(default_factory=list)
-    notes: str = ""
     raw_plan: str = ""  # full text plan from the agent
 
 
@@ -111,11 +121,12 @@ class HumanAnswer(BaseModel):
 
 
 class PlanApproval(BaseModel):
-    """User approval/rejection of a migration plan."""
+    """User approval/rejection/revision of a migration plan."""
 
     file_id: str
     approved: bool
     feedback: str = ""
+    revise: bool = False  # True = re-plan with feedback, False = final decision
 
 
 # ---------- Final result ----------

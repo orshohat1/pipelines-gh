@@ -107,21 +107,53 @@ async def _process_single_file(
     plan_data = plan.model_dump()
     await emit(Stage.PLAN_READY, "Migration plan ready — awaiting approval", data=plan_data)
 
-    # ── HITL Approval Gate ───────────────────────────────────────────────
-    await emit(Stage.AWAITING_APPROVAL, "Waiting for user to approve the migration plan...")
+    # ── HITL Approval Gate (with revision loop) ──────────────────────────
+    max_revisions = 5
+    for _revision_round in range(max_revisions):
+        await emit(Stage.AWAITING_APPROVAL, "Waiting for user to approve the migration plan...")
 
-    approval: PlanApproval = await ws_manager.request_plan_approval(job_id, file_id, plan_data)
+        approval: PlanApproval = await ws_manager.request_plan_approval(job_id, file_id, plan_data)
 
-    if not approval.approved:
-        msg = f"Plan rejected by user. Feedback: {approval.feedback}" if approval.feedback else "Plan rejected by user."
-        await emit(Stage.ERROR, msg)
-        return MigrationResult(
-            file_id=file_id,
-            filename=filename,
-            source_type=validation.pipeline_type,
-            plan=plan,
-            error=msg,
-        )
+        if approval.revise and approval.feedback:
+            # User wants to revise — re-plan with feedback
+            await emit(Stage.PLANNING, f"Revising plan: {approval.feedback}")
+            try:
+                plan = await plan_migration(
+                    client,
+                    filename,
+                    content,
+                    validation.pipeline_type,
+                    byok,
+                    on_user_question=on_user_question,
+                    revision_feedback=approval.feedback,
+                    previous_plan=plan_data,
+                )
+            except Exception as e:
+                logger.exception("Plan revision failed for %s", filename)
+                await emit(Stage.ERROR, f"Plan revision failed: {e}")
+                return MigrationResult(
+                    file_id=file_id,
+                    filename=filename,
+                    source_type=validation.pipeline_type,
+                    error=f"Plan revision failed: {e}",
+                )
+            plan_data = plan.model_dump()
+            await emit(Stage.PLAN_READY, "Revised plan ready — awaiting approval", data=plan_data)
+            continue
+
+        if not approval.approved:
+            msg = f"Plan rejected by user. Feedback: {approval.feedback}" if approval.feedback else "Plan rejected by user."
+            await emit(Stage.ERROR, msg)
+            return MigrationResult(
+                file_id=file_id,
+                filename=filename,
+                source_type=validation.pipeline_type,
+                plan=plan,
+                error=msg,
+            )
+
+        # Approved — proceed to coding
+        break
 
     # ── Stage 3: Code Generation (with eval loop) ────────────────────────
     await emit(Stage.CODING, "Generating GitHub Actions workflow YAML...")

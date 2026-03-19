@@ -178,7 +178,7 @@ export default function FileUpload({ onUpload, onSubmitText, disabled }: Props) 
             <textarea
               className="w-full rounded-xl border border-gray-700/50 bg-gray-800/30 px-4 py-3.5 text-sm text-gray-100 font-mono leading-relaxed placeholder-gray-600 focus:border-indigo-500 focus:outline-none resize-none yaml-code transition"
               rows={14}
-              placeholder={"Paste your pipeline content here...\n\ntrigger:\n  branches:\n    include:\n      - main\n\npool:\n  vmImage: 'ubuntu-latest'\n\nsteps:\n  - script: echo Hello\n    displayName: 'Run a script'"}
+              placeholder={"Paste your pipeline content here..."}
               value={text}
               disabled={disabled}
               onChange={(e) => setText(e.target.value)}

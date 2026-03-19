@@ -1,45 +1,114 @@
-import { ShieldCheck, X, AlertTriangle, Key, Briefcase, GitBranch, Code2 } from "lucide-react";
+import { useState } from "react";
+import {
+  ShieldCheck,
+  X,
+  AlertTriangle,
+  ArrowRight,
+  Zap,
+  GitBranch,
+  ChevronDown,
+  Lightbulb,
+  ClipboardList,
+  MessageSquare,
+  Send,
+} from "lucide-react";
 import type { PlanApprovalRequest } from "../types";
 
 interface Props {
   approval: PlanApprovalRequest;
-  onApprove: (fileId: string, approved: boolean, feedback?: string) => void;
+  onApprove: (fileId: string, approved: boolean, feedback?: string, revise?: boolean) => void;
 }
 
-function SectionLabel({ children, icon: Icon }: { children: React.ReactNode; icon: React.ComponentType<{ size: number; className?: string }> }) {
-  return (
-    <div className="flex items-center gap-2 mb-2">
-      <Icon size={14} className="text-gray-500" />
-      <span className="text-xs font-medium uppercase tracking-wider text-gray-500">{children}</span>
-    </div>
-  );
+/** Build a plain-language summary of the migration plan. */
+function buildSummary(raw: Record<string, unknown>) {
+  const workflowName = typeof raw.workflow_name === "string" ? raw.workflow_name : "GitHub Actions workflow";
+  const description = typeof raw.description === "string" ? raw.description : "";
+  const triggers = Array.isArray(raw.triggers) ? (raw.triggers as string[]) : [];
+  const jobs = Array.isArray(raw.jobs) ? (raw.jobs as Record<string, unknown>[]) : [];
+  const warnings = Array.isArray(raw.warnings) ? (raw.warnings as { severity: string; message: string }[]) : [];
+  const prerequisites = Array.isArray(raw.prerequisites) ? (raw.prerequisites as { what: string; why: string; how: string }[]) : [];
+  const enhancements = Array.isArray(raw.enhancements) ? (raw.enhancements as { title: string; description: string }[]) : [];
+
+  const sentences: string[] = [];
+
+  // Trigger sentence
+  if (triggers.length > 0) {
+    const triggerNames = triggers.map(t => {
+      if (t === "workflow_dispatch") return "manual trigger";
+      if (t === "push") return "pushes";
+      if (t === "pull_request") return "pull requests";
+      if (t === "schedule") return "scheduled runs";
+      return t;
+    });
+    sentences.push(`Runs on ${triggerNames.join(", ")}.`);
+  }
+
+  // Jobs sentence
+  if (jobs.length === 1) {
+    const j = jobs[0]!;
+    const name = String(j.display_name || j.name || "a single job");
+    const steps = Array.isArray(j.steps) ? j.steps.length : 0;
+    sentences.push(`One job "${name}" with ${steps} steps on ${String(j.runs_on || "ubuntu-latest")}.`);
+  } else if (jobs.length > 1) {
+    const names = jobs.map(j => String(j.display_name || j.name || "unnamed"));
+    sentences.push(`${jobs.length} jobs: ${names.join(" → ")}.`);
+  }
+
+  // OIDC detection
+  const hasOIDC = jobs.some(j => {
+    const perms = j.permissions as Record<string, unknown> | undefined;
+    return perms && perms["id-token"] === "write";
+  });
+  if (hasOIDC) {
+    sentences.push("Uses OIDC for keyless Azure/cloud login.");
+  }
+
+  // Caching detection
+  const allSteps = jobs.flatMap(j => (Array.isArray(j.steps) ? j.steps : []) as Record<string, unknown>[]);
+  const hasCache = allSteps.some(s => {
+    const w = s.with as Record<string, unknown> | undefined;
+    return (typeof s.uses === "string" && s.uses.includes("cache")) || (w && "cache" in w);
+  });
+  if (hasCache) {
+    sentences.push("Dependency caching enabled.");
+  }
+
+  // Job flow for visual
+  const jobFlow = jobs.map(j => String(j.display_name || j.name || "Job"));
+
+  // Only critical/warning-level warnings
+  const criticalWarnings = warnings
+    .filter(w => w.severity === "critical" || w.severity === "warning")
+    .map(w => w.message);
+
+  return { title: workflowName, description, sentences, jobFlow, criticalWarnings, prerequisites, enhancements };
 }
 
 export default function PlanApprovalModal({ approval, onApprove }: Props) {
   const raw = approval.plan;
+  const { title, description, sentences, jobFlow, criticalWarnings, prerequisites, enhancements } = buildSummary(raw);
+  const [feedback, setFeedback] = useState("");
+  const [showFeedback, setShowFeedback] = useState(false);
 
-  // Extract typed values for safe JSX rendering
-  const workflowName = typeof raw.workflow_name === "string" ? raw.workflow_name : "";
-  const workflowType = typeof raw.workflow_type === "string" ? raw.workflow_type : "";
-  const triggers = Array.isArray(raw.triggers) ? (raw.triggers as string[]) : [];
-  const jobs = Array.isArray(raw.jobs) ? (raw.jobs as Record<string, unknown>[]) : [];
-  const secrets = Array.isArray(raw.secrets_required) ? (raw.secrets_required as { name: string; description: string }[]) : [];
-  const warnings = Array.isArray(raw.warnings) ? (raw.warnings as { severity: string; message: string }[]) : [];
-  const notes = typeof raw.notes === "string" ? raw.notes : "";
-  const rawPlan = typeof raw.raw_plan === "string" ? raw.raw_plan : "";
+  const handleRevise = () => {
+    if (!feedback.trim()) return;
+    onApprove(approval.file_id, false, feedback.trim(), true);
+    setFeedback("");
+    setShowFeedback(false);
+  };
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-md p-4">
-      <div className="w-full max-w-2xl max-h-[85vh] flex flex-col rounded-2xl border border-gray-800 bg-gray-950 shadow-2xl animate-fade-in-up">
+      <div className="w-full max-w-2xl max-h-[90vh] flex flex-col rounded-2xl border border-gray-800 bg-gray-950 shadow-2xl animate-fade-in-up">
         {/* Header */}
         <div className="flex items-center justify-between border-b border-gray-800/50 px-6 py-4">
           <div className="flex items-center gap-3">
-            <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-amber-500/10">
-              <ShieldCheck size={18} className="text-amber-400" />
+            <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-emerald-500/10">
+              <ShieldCheck size={18} className="text-emerald-400" />
             </div>
             <div>
-              <h2 className="text-sm font-semibold text-gray-100">Approve Migration Plan</h2>
-              <p className="text-xs text-gray-500">Review the plan before generating the workflow</p>
+              <h2 className="text-sm font-semibold text-gray-100">Migration Plan</h2>
+              <p className="text-xs text-gray-500">Review, revise, or approve</p>
             </div>
           </div>
           <button
@@ -51,114 +120,147 @@ export default function PlanApprovalModal({ approval, onApprove }: Props) {
           </button>
         </div>
 
-        {/* Plan details */}
-        <div className="flex-1 overflow-auto px-6 py-5 space-y-5 text-sm">
-          {/* Top info row */}
-          {(workflowName || workflowType) && (
-            <div className="grid grid-cols-2 gap-3">
-              {workflowName && (
-                <div className="rounded-lg border border-gray-800/50 bg-gray-900/50 px-3.5 py-2.5">
-                  <p className="text-[10px] uppercase tracking-wider text-gray-500 mb-0.5">Workflow</p>
-                  <p className="text-sm text-gray-200 font-medium">{workflowName}</p>
-                </div>
-              )}
-              {workflowType && (
-                <div className="rounded-lg border border-gray-800/50 bg-gray-900/50 px-3.5 py-2.5">
-                  <p className="text-[10px] uppercase tracking-wider text-gray-500 mb-0.5">Type</p>
-                  <p className="text-sm text-gray-200 capitalize">{workflowType}</p>
-                </div>
-              )}
+        {/* Content */}
+        <div className="flex-1 overflow-auto px-6 py-5 space-y-5">
+          {/* Title + Description */}
+          <div>
+            <div className="flex items-center gap-2 mb-1">
+              <Zap size={14} className="text-indigo-400" />
+              <span className="text-[10px] uppercase tracking-wider text-gray-500">Workflow</span>
+            </div>
+            <h3 className="text-base font-semibold text-gray-100">{title}</h3>
+            {description && (
+              <p className="mt-2 text-sm text-gray-400 leading-relaxed">{description}</p>
+            )}
+          </div>
+
+          {/* Quick facts */}
+          {sentences.length > 0 && (
+            <div className="space-y-1">
+              {sentences.map((s, i) => (
+                <p key={i} className="text-sm text-gray-500 leading-relaxed">• {s}</p>
+              ))}
             </div>
           )}
 
-          {/* Triggers */}
-          {triggers.length > 0 && (
-            <div>
-              <SectionLabel icon={GitBranch}>Triggers</SectionLabel>
-              <div className="flex flex-wrap gap-1.5">
-                {triggers.map((t) => (
-                  <span key={t} className="rounded-md bg-indigo-500/10 px-2.5 py-1 text-xs font-mono text-indigo-400 ring-1 ring-indigo-500/20">
-                    {t}
+          {/* Job flow visualization */}
+          {jobFlow.length > 1 && (
+            <div className="flex items-center gap-2 flex-wrap py-1">
+              {jobFlow.map((name, i) => (
+                <div key={i} className="flex items-center gap-2">
+                  <span className="rounded-lg bg-indigo-500/10 px-3 py-1.5 text-xs font-medium text-indigo-400 ring-1 ring-indigo-500/20">
+                    {name}
                   </span>
-                ))}
-              </div>
+                  {i < jobFlow.length - 1 && (
+                    <ArrowRight size={14} className="text-gray-600" />
+                  )}
+                </div>
+              ))}
             </div>
           )}
 
-          {/* Jobs */}
-          {jobs.length > 0 && (
+          {/* Prerequisites */}
+          {prerequisites.length > 0 && (
             <div>
-              <SectionLabel icon={Briefcase}>Jobs ({jobs.length})</SectionLabel>
-              <div className="space-y-1.5">
-                {jobs.map((job, i) => (
-                  <div key={i} className="flex items-center gap-2.5 rounded-lg border border-gray-800/50 bg-gray-900/30 px-3 py-2">
-                    <Code2 size={14} className="shrink-0 text-indigo-400/70" />
-                    <span className="text-sm text-gray-300">
-                      {String(job.display_name || job.name || job.id || `Job ${i + 1}`)}
-                    </span>
-                    {job.runs_on ? (
-                      <span className="ml-auto text-[10px] text-gray-600 font-mono">{String(job.runs_on)}</span>
-                    ) : null}
+              <div className="flex items-center gap-2 mb-2.5">
+                <ClipboardList size={14} className="text-amber-400" />
+                <span className="text-xs font-medium text-amber-400">Before you run this workflow</span>
+              </div>
+              <div className="space-y-2">
+                {prerequisites.map((p, i) => (
+                  <div key={i} className="rounded-lg border border-amber-500/15 bg-amber-500/5 px-3.5 py-2.5">
+                    <p className="text-sm font-medium text-gray-200">{p.what}</p>
+                    <p className="text-xs text-gray-400 mt-0.5">{p.why}</p>
+                    {p.how && (
+                      <code className="mt-1.5 block text-[11px] text-amber-300/70 bg-gray-900/50 rounded px-2 py-1 font-mono break-all">
+                        {p.how}
+                      </code>
+                    )}
                   </div>
                 ))}
               </div>
             </div>
           )}
 
-          {/* Secrets */}
-          {secrets.length > 0 && (
-            <div>
-              <SectionLabel icon={Key}>Secrets Required</SectionLabel>
-              <div className="rounded-lg border border-amber-500/10 bg-amber-500/5 px-3.5 py-2.5 space-y-1.5">
-                {secrets.map((s, i) => (
-                  <div key={i} className="flex items-start gap-2 text-xs">
-                    <span className="font-mono text-amber-400 shrink-0">{s.name}</span>
-                    <span className="text-gray-400">{s.description}</span>
+          {/* Enhancement proposals */}
+          {enhancements.length > 0 && (
+            <details className="group">
+              <summary className="flex items-center gap-2 cursor-pointer text-xs font-medium text-violet-400 hover:text-violet-300 transition">
+                <Lightbulb size={14} />
+                <span>{enhancements.length} best-practice enhancement{enhancements.length > 1 ? "s" : ""} proposed</span>
+                <ChevronDown size={12} className="ml-auto transition-transform group-open:rotate-180 text-gray-600" />
+              </summary>
+              <div className="mt-2.5 space-y-2">
+                {enhancements.map((e, i) => (
+                  <div key={i} className="rounded-lg border border-violet-500/15 bg-violet-500/5 px-3.5 py-2.5">
+                    <p className="text-sm font-medium text-gray-200">{e.title}</p>
+                    <p className="text-xs text-gray-400 mt-0.5">{e.description}</p>
                   </div>
                 ))}
+                <p className="text-[11px] text-gray-600 italic">
+                  Want these? Click "Revise Plan" and ask for them.
+                </p>
               </div>
-            </div>
+            </details>
           )}
 
           {/* Warnings */}
-          {warnings.length > 0 && (
-            <div>
-              <SectionLabel icon={AlertTriangle}>Warnings</SectionLabel>
-              <div className="space-y-1.5">
-                {warnings.map((w, i) => (
-                  <div key={i} className="flex items-start gap-2 rounded-lg border border-amber-500/10 bg-amber-500/5 px-3 py-2 text-xs text-amber-400">
-                    <AlertTriangle size={12} className="mt-0.5 shrink-0" />
-                    <span>{w.message}</span>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {/* Notes */}
-          {notes && (
-            <div className="rounded-lg border border-gray-800/50 bg-gray-900/30 px-3.5 py-2.5">
-              <p className="text-[10px] uppercase tracking-wider text-gray-500 mb-1">Notes</p>
-              <p className="text-xs text-gray-400 whitespace-pre-wrap leading-relaxed">{notes}</p>
+          {criticalWarnings.length > 0 && (
+            <div className="space-y-2">
+              {criticalWarnings.map((msg, i) => (
+                <div key={i} className="flex items-start gap-2.5 rounded-lg border border-amber-500/15 bg-amber-500/5 px-3.5 py-2.5">
+                  <AlertTriangle size={14} className="mt-0.5 shrink-0 text-amber-400" />
+                  <p className="text-xs text-amber-300/90 leading-relaxed">{msg}</p>
+                </div>
+              ))}
             </div>
           )}
 
           {/* Raw plan expandable */}
-          {rawPlan && (
-            <details className="group cursor-pointer">
-              <summary className="text-xs text-gray-600 hover:text-gray-400 transition">
-                Show raw plan output
-              </summary>
-              <pre className="mt-2 max-h-48 overflow-auto rounded-lg border border-gray-800/50 bg-gray-900/50 p-3 text-xs text-gray-500 whitespace-pre-wrap font-mono">
-                {rawPlan}
-              </pre>
-            </details>
+          <details className="group">
+            <summary className="flex items-center gap-1.5 cursor-pointer text-xs text-gray-600 hover:text-gray-400 transition">
+              <ChevronDown size={12} className="transition-transform group-open:rotate-180" />
+              View full plan JSON
+            </summary>
+            <pre className="mt-2 max-h-48 overflow-auto rounded-lg border border-gray-800/50 bg-gray-900/50 p-3 text-xs text-gray-500 whitespace-pre-wrap font-mono">
+              {JSON.stringify(raw, null, 2)}
+            </pre>
+          </details>
+
+          {/* Revision feedback area */}
+          {showFeedback && (
+            <div className="space-y-2">
+              <label className="flex items-center gap-2 text-xs font-medium text-gray-300">
+                <MessageSquare size={14} className="text-indigo-400" />
+                What would you like to change?
+              </label>
+              <textarea
+                value={feedback}
+                onChange={(e) => setFeedback(e.target.value)}
+                placeholder="e.g. Split into separate build and deploy jobs, add CodeQL scanning, use matrix strategy for node 18 and 20..."
+                className="w-full rounded-lg border border-gray-700/50 bg-gray-900/50 px-3.5 py-2.5 text-sm text-gray-200 placeholder-gray-600 focus:border-indigo-500/50 focus:outline-none focus:ring-1 focus:ring-indigo-500/30 resize-none"
+                rows={3}
+                autoFocus
+              />
+              <button
+                type="button"
+                disabled={!feedback.trim()}
+                onClick={handleRevise}
+                className="flex items-center gap-2 rounded-lg bg-indigo-600/20 px-4 py-2 text-sm font-medium text-indigo-400 ring-1 ring-indigo-500/30 hover:bg-indigo-600/30 transition disabled:opacity-40 disabled:cursor-not-allowed"
+              >
+                <Send size={14} />
+                Send & Revise Plan
+              </button>
+            </div>
           )}
         </div>
 
         {/* Actions */}
         <div className="flex items-center justify-between border-t border-gray-800/50 px-6 py-4">
-          <p className="text-xs text-gray-600">This action will generate the workflow YAML</p>
+          <div className="flex items-center gap-1.5">
+            <GitBranch size={12} className="text-gray-600" />
+            <p className="text-xs text-gray-600">A YAML workflow file will be generated</p>
+          </div>
           <div className="flex items-center gap-2.5">
             <button
               type="button"
@@ -166,6 +268,13 @@ export default function PlanApprovalModal({ approval, onApprove }: Props) {
               className="rounded-lg border border-gray-700/50 px-4 py-2 text-sm text-gray-400 hover:border-red-500/50 hover:text-red-400 transition"
             >
               Reject
+            </button>
+            <button
+              type="button"
+              onClick={() => setShowFeedback(!showFeedback)}
+              className="rounded-lg border border-indigo-500/30 bg-indigo-600/10 px-4 py-2 text-sm font-medium text-indigo-400 hover:bg-indigo-600/20 transition"
+            >
+              Revise Plan
             </button>
             <button
               type="button"

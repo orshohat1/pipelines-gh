@@ -73,6 +73,28 @@ interface Props {
   onViewYaml?: () => void;
 }
 
+function ValidationBadge({ data }: { data?: Record<string, unknown> | null }) {
+  if (!data || !data.pipeline_type) return null;
+  const pType = String(data.pipeline_type).replace(/-/g, " ").replace(/\b\w/g, c => c.toUpperCase());
+  const confidence = typeof data.confidence === "number" ? data.confidence : null;
+  const details = typeof data.details === "string" ? data.details : "";
+  return (
+    <div className="flex items-center gap-3 rounded-lg border border-indigo-500/15 bg-indigo-500/5 px-3.5 py-2.5">
+      <div className="flex items-center gap-2 text-xs">
+        <Search size={12} className="text-indigo-400 shrink-0" />
+        <span className="text-gray-400">Detected</span>
+        <span className="font-medium text-indigo-400">{pType}</span>
+        {confidence !== null && (
+          <span className="text-gray-500">({Math.round(confidence * 100)}% confidence)</span>
+        )}
+      </div>
+      {details && (
+        <span className="text-[11px] text-gray-500 ml-auto truncate max-w-[50%]" title={details}>{details}</span>
+      )}
+    </div>
+  );
+}
+
 export default function PipelineStatus({ file, onViewYaml }: Props) {
   const currentVisibleIdx = getVisibleIndex(file.stage);
   const isError = file.stage === "error";
@@ -152,6 +174,9 @@ export default function PipelineStatus({ file, onViewYaml }: Props) {
           );
         })}
       </div>
+
+      {/* Validation result */}
+      {file.stage !== "error" && <ValidationBadge data={file.validationData} />}
 
       {/* Message */}
       {file.message && (
