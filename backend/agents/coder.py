@@ -85,6 +85,42 @@ Return ONLY a valid JSON array where each element has "filename" and "content" (
 [{"filename": "...", "content": "name: ...\\n..."}]
 """
 
+JOB_GENERATOR_SYSTEM = """Generate ONLY the GitHub Actions job definition for ONE specific job.
+Output raw YAML for just that job, starting with the job key at the top level.
+Do NOT include `name:`, `on:`, `permissions:`, `env:`, `concurrency:`, or any
+workflow-level keys — ONLY the job block.
+
+Apply all GitHub Actions best practices: action pinning to major versions,
+per-job permissions (least privilege), caching, artifact upload/download,
+secrets vs vars distinction.
+
+Example output format:
+build:
+  runs-on: ubuntu-latest
+  permissions:
+    contents: read
+  steps:
+    - uses: actions/checkout@v4
+    ...
+"""
+
+JOB_ASSEMBLY_SYSTEM = """You receive a migration plan and individually-generated GitHub Actions
+job definitions. Assemble them into a single complete workflow file.
+
+Add the workflow-level configuration:
+- `name:` from the plan
+- `on:` triggers from the plan
+- Top-level `permissions: {}` (least privilege, jobs override as needed)
+- `concurrency:` if appropriate
+- `env:` for shared environment variables
+
+Ensure job dependencies (`needs:`) are correctly set based on the plan.
+Ensure all jobs are properly indented under the `jobs:` key.
+Do not modify the job content — only arrange them into a valid workflow.
+
+Output ONLY the complete raw YAML. Start with `name:`.
+"""
+
 
 # ── actionlint integration ──────────────────────────────────────────────────
 
@@ -129,6 +165,119 @@ def run_actionlint(yaml_content: str) -> tuple[bool, str]:
 # ── Agent functions ──────────────────────────────────────────────────────────
 
 
+async def _generate_single_job(
+    client: CopilotClient,
+    plan: MigrationPlan,
+    source_content: str,
+    pipeline_type: PipelineType,
+    job_info: dict,
+    byok: BYOKProviderConfig | None,
+) -> str:
+    """Generate YAML for a single job from the migration plan."""
+    job_name = job_info.get("name", "job")
+    model = byok.model_name if byok else "claude-sonnet-4.6"
+    session_opts: dict = {
+        "model": model,
+        "system_message": {"mode": "append", "content": JOB_GENERATOR_SYSTEM},
+        "on_permission_request": PermissionHandler.approve_all,
+        "config_dir": _CONFIG_DIR,
+    }
+    provider = byok.to_sdk_provider() if byok else None
+    if provider:
+        session_opts["provider"] = provider
+
+    session = await client.create_session(session_opts)
+    try:
+        prompt = (
+            f"Generate ONLY the '{job_name}' job for this {pipeline_type.value} pipeline migration.\n\n"
+            f"Job details from plan:\n```json\n{json.dumps(job_info, indent=2)}\n```\n\n"
+            f"Full migration plan:\n```json\n{plan.model_dump_json(indent=2)}\n```\n\n"
+            f"Source pipeline:\n```yaml\n{source_content}\n```"
+        )
+        response = await session.send_and_wait({"prompt": prompt}, timeout=120)
+        raw = response.data.content if response else ""
+
+        text = raw.strip()
+        fence_match = re.search(r"```(?:ya?ml)?\s*\n?(.*?)```", text, re.DOTALL)
+        if fence_match:
+            text = fence_match.group(1).strip()
+        elif text.startswith("```"):
+            first_newline = text.index("\n") if "\n" in text else 3
+            text = text[first_newline + 1 :]
+            if text.endswith("```"):
+                text = text[:-3]
+            text = text.strip()
+
+        return text
+    finally:
+        sid = session.session_id
+        await session.disconnect()
+        try:
+            await client.delete_session(sid)
+        except Exception:
+            pass
+
+
+async def _assemble_jobs_into_workflow(
+    client: CopilotClient,
+    plan: MigrationPlan,
+    job_yamls: list[tuple[str, str]],
+    pipeline_type: PipelineType,
+    byok: BYOKProviderConfig | None,
+    target_file: OutputFileSpec | None,
+) -> str:
+    """Assemble individually-generated job YAMLs into a complete workflow file."""
+    model = byok.model_name if byok else "openai/gpt-5.4-mini"
+    session_opts: dict = {
+        "model": model,
+        "system_message": {"mode": "replace", "content": JOB_ASSEMBLY_SYSTEM},
+        "on_permission_request": PermissionHandler.approve_all,
+    }
+    provider = byok.to_sdk_provider() if byok else None
+    if provider:
+        session_opts["provider"] = provider
+
+    session = await client.create_session(session_opts)
+    try:
+        jobs_context = "\n\n".join(
+            f"### Job: {name}\n```yaml\n{yaml}\n```" for name, yaml in job_yamls
+        )
+        file_hint = ""
+        if target_file:
+            file_hint = f"\nTarget file: {target_file.filename} ({target_file.file_type})\n"
+            if target_file.file_type == "reusable":
+                file_hint += "This MUST use `on: workflow_call:` with appropriate inputs.\n"
+
+        prompt = (
+            f"Assemble these {len(job_yamls)} independently-generated jobs into a complete "
+            f"{pipeline_type.value} → GitHub Actions workflow file.{file_hint}\n\n"
+            f"{jobs_context}\n\n"
+            f"Migration plan:\n```json\n{plan.model_dump_json(indent=2)}\n```"
+        )
+        response = await session.send_and_wait({"prompt": prompt}, timeout=120)
+        raw = response.data.content if response else ""
+
+        text = raw.strip()
+        fence_match = re.search(r"```(?:ya?ml)?\s*\n?(.*?)```", text, re.DOTALL)
+        if fence_match:
+            text = fence_match.group(1).strip()
+        elif text.startswith("```"):
+            first_newline = text.index("\n") if "\n" in text else 3
+            text = text[first_newline + 1 :]
+            if text.endswith("```"):
+                text = text[:-3]
+            text = text.strip()
+
+        return text
+    finally:
+        sid = session.session_id
+        await session.disconnect()
+        try:
+            await client.delete_session(sid)
+        except Exception:
+            pass
+
+
 async def _generate_yaml(
     client: CopilotClient,
     plan: MigrationPlan,
@@ -136,8 +285,44 @@ async def _generate_yaml(
     pipeline_type: PipelineType,
     byok: BYOKProviderConfig | None,
     target_file: OutputFileSpec | None = None,
+    on_agent_activity: callable | None = None,
 ) -> str:
-    """Generate initial GitHub Actions YAML from a migration plan."""
+    """Generate initial GitHub Actions YAML from a migration plan.
+
+    When the target file contains 2+ jobs, generation is parallelized per-job
+    with separate agents, then assembled into a single workflow.
+    """
+    # Determine which jobs belong to this target file
+    if target_file and target_file.job_names:
+        jobs_for_file = [j for j in plan.jobs if j.get("name") in target_file.job_names]
+    else:
+        jobs_for_file = plan.jobs
+
+    # Per-job parallel generation when 2+ jobs
+    if len(jobs_for_file) >= 2:
+        target_name = target_file.filename if target_file else (plan.workflow_name or "workflow")
+
+        async def gen_job(job_info: dict) -> tuple[str, str]:
+            jn = job_info.get("name", "job")
+            if on_agent_activity:
+                await on_agent_activity("job-gen", "running", f"Generating job: {jn}", jn)
+            yaml = await _generate_single_job(client, plan, source_content, pipeline_type, job_info, byok)
+            if on_agent_activity:
+                await on_agent_activity("job-gen", "completed", f"Job '{jn}' ready", jn)
+            return jn, yaml
+
+        job_results = await asyncio.gather(*(gen_job(j) for j in jobs_for_file))
+
+        if on_agent_activity:
+            await on_agent_activity("assembler", "running", f"Assembling {len(job_results)} jobs", target_name)
+        assembled = await _assemble_jobs_into_workflow(
+            client, plan, list(job_results), pipeline_type, byok, target_file,
+        )
+        if on_agent_activity:
+            await on_agent_activity("assembler", "completed", f"Assembled {target_name}", target_name)
+        return assembled
+
+    # Single-job or no jobs: full-file generation (original path)
     model = byok.model_name if byok else "claude-sonnet-4.6"
     session_opts: dict = {
         "model": model,
@@ -388,7 +573,7 @@ async def generate_workflow(
 
     if on_agent_activity:
         await on_agent_activity("generator", "running", f"Generating {target_name}", target_name)
-    yaml_content = await _generate_yaml(client, plan, source_content, pipeline_type, byok, target_file)
+    yaml_content = await _generate_yaml(client, plan, source_content, pipeline_type, byok, target_file, on_agent_activity)
     if on_agent_activity:
         await on_agent_activity("generator", "completed", f"Generated {target_name}", target_name)
 

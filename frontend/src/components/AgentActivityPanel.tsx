@@ -2,8 +2,10 @@ import { useEffect, useState } from "react";
 import {
   CheckCircle2,
   Code2,
+  Combine,
   Eye,
   GitMerge,
+  Layers,
   ClipboardList,
   Loader2,
   Search,
@@ -41,6 +43,22 @@ const AGENT_CONFIG: Record<
     bg: "bg-emerald-500/10",
     border: "border-emerald-500/25",
     dot: "bg-emerald-400",
+  },
+  "job-gen": {
+    icon: Combine,
+    label: "Job Agent",
+    color: "text-teal-400",
+    bg: "bg-teal-500/10",
+    border: "border-teal-500/25",
+    dot: "bg-teal-400",
+  },
+  assembler: {
+    icon: Layers,
+    label: "Assembler",
+    color: "text-violet-400",
+    bg: "bg-violet-500/10",
+    border: "border-violet-500/25",
+    dot: "bg-violet-400",
   },
   evaluator: {
     icon: Eye,
