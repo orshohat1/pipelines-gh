@@ -1,14 +1,13 @@
-"""Runtime fetcher for official GitHub Actions best practices and latest action versions.
+"""Smart runtime fetcher for official GitHub Actions best practices.
 
-Fetches documentation from GitHub's official sources at runtime so agents
-always work with up-to-date action versions and real workflow examples.
+Analyzes the source pipeline to detect which topics are relevant, then
+fetches only the matching documentation sections and action versions.
 Results are cached in memory with a configurable TTL.
 """
 
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 import re
 import time
@@ -48,14 +47,108 @@ TRACKED_ACTIONS: dict[str, str] = {
     "google-github-actions/auth": "v2",
 }
 
-# Starter workflow templates to fetch as real-world examples
-_STARTER_WORKFLOWS: dict[str, str] = {
-    "Node.js CI": "ci/node.js.yml",
-    "Python application": "ci/python-app.yml",
-    "Docker image": "ci/docker-image.yml",
+# Starter workflow templates — mapped to topics for selective fetch
+_STARTER_WORKFLOWS: dict[str, tuple[str, str]] = {
+    # topic_key → (display_name, path)
+    "node": ("Node.js CI", "ci/node.js.yml"),
+    "python": ("Python application", "ci/python-app.yml"),
+    "docker": ("Docker image", "ci/docker-image.yml"),
+    "dotnet": (".NET", "ci/dotnet.yml"),
+    "java": ("Java with Maven", "ci/maven.yml"),
+    "go": ("Go", "ci/go.yml"),
 }
 
 _STARTER_BASE = "https://raw.githubusercontent.com/actions/starter-workflows/main"
+
+
+# ── Topic detection ──────────────────────────────────────────────────────────
+
+# Each topic maps to (detection_patterns, relevant_actions, docs_section_key)
+_TOPICS: dict[str, dict[str, Any]] = {
+    "node": {
+        "patterns": [r"node|npm|yarn|pnpm|package\.json|NodeTool|setup-node"],
+        "actions": ["actions/setup-node"],
+        "starter": "node",
+    },
+    "python": {
+        "patterns": [r"python|(?<!\w)pip(?!\w)|poetry|conda|requirements\.txt|UsePythonVersion|setup-python"],
+        "actions": ["actions/setup-python"],
+        "starter": "python",
+    },
+    "dotnet": {
+        "patterns": [r"dotnet|nuget|csproj|UseDotNet|setup-dotnet|msbuild|\.sln"],
+        "actions": ["actions/setup-dotnet"],
+        "starter": "dotnet",
+    },
+    "java": {
+        "patterns": [r"java|maven|gradle|pom\.xml|setup-java|jdk"],
+        "actions": ["actions/setup-java"],
+        "starter": "java",
+    },
+    "go": {
+        "patterns": [r"\bgo\b|golang|go\.mod|setup-go"],
+        "actions": ["actions/setup-go"],
+        "starter": "go",
+    },
+    "docker": {
+        "patterns": [r"docker|container|Dockerfile|registry|acr|ecr|gcr|build-push"],
+        "actions": ["docker/build-push-action", "docker/login-action", "docker/setup-buildx-action"],
+    },
+    "azure": {
+        "patterns": [r"azure|AzureWebApp|AzureCLI|az\s|service.?connection|AzureRm"],
+        "actions": ["azure/login", "azure/webapps-deploy"],
+    },
+    "aws": {
+        "patterns": [r"aws|amazon|s3|ec2|lambda|ecs|configure-aws"],
+        "actions": ["aws-actions/configure-aws-credentials"],
+    },
+    "gcp": {
+        "patterns": [r"gcp|google|gcloud|cloud.?run|gke"],
+        "actions": ["google-github-actions/auth"],
+    },
+    "artifacts": {
+        "patterns": [r"artifact|upload|download|archiveArtifact|publish"],
+        "actions": ["actions/upload-artifact", "actions/download-artifact"],
+    },
+    "cache": {
+        "patterns": [r"cache|restore.?key|hashFiles"],
+        "actions": ["actions/cache"],
+    },
+    "security": {
+        "patterns": [r"security|codeql|dependabot|dependency.?review|trivy|scanning|sbom"],
+        "actions": ["actions/dependency-review-action", "github/codeql-action"],
+    },
+    "deploy": {
+        "patterns": [r"deploy|environment|production|staging|approval|protection|slot"],
+        "actions": [],
+    },
+    "matrix": {
+        "patterns": [r"matrix|(?<!\w)strategy(?=:?\s*\{?\s*matrix)|parallel.+os|fail.?fast|max.?parallel"],
+        "actions": [],
+    },
+    "reusable": {
+        "patterns": [r"template|reusable|workflow_call|include:|extends:|shared.?lib"],
+        "actions": [],
+    },
+}
+
+
+def detect_topics(pipeline_content: str) -> set[str]:
+    """Analyze pipeline content to determine which topics are relevant.
+
+    Returns a set of topic keys (e.g. {"node", "docker", "deploy", "azure"}).
+    Always includes "core" topics (triggers, permissions, concurrency, secrets).
+    """
+    content_lower = pipeline_content.lower()
+    detected: set[str] = set()
+
+    for topic_key, topic_info in _TOPICS.items():
+        for pattern in topic_info["patterns"]:
+            if re.search(pattern, content_lower):
+                detected.add(topic_key)
+                break
+
+    return detected
 
 
 # ── Cache helpers ────────────────────────────────────────────────────────────
@@ -180,8 +273,9 @@ async def fetch_starter_workflows() -> dict[str, str]:
 
 # ── Main entry point ─────────────────────────────────────────────────────────
 
-# Best-practices syntax reference (stable content, enriched with live data)
-_SYNTAX_REFERENCE = """\
+# Topic-keyed documentation sections — only the relevant ones get included
+_DOCS_SECTIONS: dict[str, str] = {
+    "triggers": """\
 ## Workflow Triggers
 ```yaml
 on:
@@ -201,16 +295,9 @@ on:
         options: [dev, staging, production]
   schedule:
     - cron: '30 5 * * 1-5'
-  workflow_call:
-    inputs:
-      config-name:
-        required: true
-        type: string
-    secrets:
-      token:
-        required: true
-```
+```""",
 
+    "permissions": """\
 ## Permissions (all available scopes)
 ```yaml
 permissions:
@@ -228,15 +315,58 @@ permissions:
   pull-requests: read|write|none
   security-events: read|write|none
   statuses: read|write|none
-```
+```""",
 
+    "concurrency": """\
 ## Concurrency Control
 ```yaml
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true   # true for PR builds, false for deployments
-```
+```""",
 
+    "secrets_vars": """\
+## Secrets vs Variables
+```yaml
+# secrets.* — ONLY for sensitive credentials
+env:
+  CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+  API_TOKEN: ${{ secrets.API_TOKEN }}
+
+# vars.* — for non-sensitive configuration
+env:
+  APP_NAME: ${{ vars.APP_NAME }}
+  RESOURCE_GROUP: ${{ vars.RESOURCE_GROUP }}
+  AZURE_REGION: ${{ vars.AZURE_REGION }}
+```""",
+
+    "expressions": """\
+## Expressions & Contexts
+```yaml
+# Conditionals
+if: ${{ github.ref == 'refs/heads/main' }}
+if: ${{ github.event_name == 'pull_request' }}
+if: ${{ needs.build.result == 'success' }}
+if: ${{ always() }}   # run regardless of prior step status
+if: ${{ failure() }}   # run only if a prior step failed
+
+# Output passing between steps
+- id: my-step
+  run: echo "value=hello" >> $GITHUB_OUTPUT
+- run: echo ${{ steps.my-step.outputs.value }}
+
+# Output passing between jobs
+jobs:
+  job1:
+    outputs:
+      result: ${{ steps.my-step.outputs.value }}
+  job2:
+    needs: job1
+    steps:
+      - run: echo ${{ needs.job1.outputs.result }}
+```""",
+
+    "matrix": """\
 ## Matrix Strategy
 ```yaml
 strategy:
@@ -252,8 +382,9 @@ strategy:
       - os: ubuntu-latest
         node-version: '22'
         experimental: true
-```
+```""",
 
+    "cache": """\
 ## Caching Patterns
 ```yaml
 # Built-in caching (preferred)
@@ -269,8 +400,9 @@ strategy:
     key: ${{ runner.os }}-node-${{ hashFiles('**/package-lock.json') }}
     restore-keys: |
       ${{ runner.os }}-node-
-```
+```""",
 
+    "artifacts": """\
 ## Artifacts
 ```yaml
 # Upload
@@ -284,11 +416,22 @@ strategy:
 - uses: actions/download-artifact@v4
   with:
     name: build-output
-```
+```""",
 
-## OIDC Authentication
+    "deploy": """\
+## Environment Protection
 ```yaml
-# Azure
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: production
+      url: ${{ steps.deploy.outputs.url }}
+```""",
+
+    "azure": """\
+## OIDC Authentication — Azure
+```yaml
 permissions:
   id-token: write
   contents: read
@@ -298,30 +441,35 @@ steps:
       client-id: ${{ secrets.AZURE_CLIENT_ID }}
       tenant-id: ${{ secrets.AZURE_TENANT_ID }}
       subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+```""",
 
-# AWS
+    "aws": """\
+## OIDC Authentication — AWS
+```yaml
+permissions:
+  id-token: write
+  contents: read
+steps:
   - uses: aws-actions/configure-aws-credentials@v4
     with:
       role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
       aws-region: us-east-1
+```""",
 
-# GCP
+    "gcp": """\
+## OIDC Authentication — GCP
+```yaml
+permissions:
+  id-token: write
+  contents: read
+steps:
   - uses: google-github-actions/auth@v2
     with:
       workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY }}
       service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
-```
+```""",
 
-## Environment Protection
-```yaml
-jobs:
-  deploy:
-    runs-on: ubuntu-latest
-    environment:
-      name: production
-      url: ${{ steps.deploy.outputs.url }}
-```
-
+    "reusable": """\
 ## Reusable Workflows
 ```yaml
 # Caller
@@ -342,104 +490,125 @@ on:
     secrets:
       token:
         required: false
-```
+```""",
 
-## Expressions & Contexts
+    "docker": """\
+## Docker Build & Push
 ```yaml
-# Available contexts: github, env, vars, secrets, needs, strategy, matrix, steps, runner, inputs
-# Conditionals
-if: ${{ github.ref == 'refs/heads/main' }}
-if: ${{ github.event_name == 'pull_request' }}
-if: ${{ needs.build.result == 'success' }}
-if: ${{ always() }}   # run regardless of prior step status
-if: ${{ failure() }}   # run only if a prior step failed
-if: ${{ contains(github.event.head_commit.message, '[skip ci]') }}
+- uses: docker/setup-buildx-action@v3
+- uses: docker/login-action@v3
+  with:
+    registry: ghcr.io
+    username: ${{ github.actor }}
+    password: ${{ secrets.GITHUB_TOKEN }}
+- uses: docker/build-push-action@v6
+  with:
+    push: true
+    tags: ghcr.io/${{ github.repository }}:${{ github.sha }}
+```""",
+}
 
-# Output passing between steps
-- id: my-step
-  run: echo "value=hello" >> $GITHUB_OUTPUT
-- run: echo ${{ steps.my-step.outputs.value }}
-
-# Output passing between jobs
-jobs:
-  job1:
-    outputs:
-      result: ${{ steps.my-step.outputs.value }}
-  job2:
-    needs: job1
-    steps:
-      - run: echo ${{ needs.job1.outputs.result }}
-```
-
-## Secrets vs Variables
-```yaml
-# secrets.* — ONLY for sensitive credentials
-env:
-  CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
-  API_TOKEN: ${{ secrets.API_TOKEN }}
-
-# vars.* — for non-sensitive configuration
-env:
-  APP_NAME: ${{ vars.APP_NAME }}
-  RESOURCE_GROUP: ${{ vars.RESOURCE_GROUP }}
-  AZURE_REGION: ${{ vars.AZURE_REGION }}
-```
-"""
+# Core topics always included (small & universally relevant)
+_CORE_TOPICS = {"triggers", "permissions", "concurrency", "secrets_vars", "expressions"}
 
 
-async def fetch_best_practices() -> str:
-    """Fetch and compile an up-to-date GitHub Actions best-practices reference.
+async def fetch_best_practices(pipeline_content: str = "") -> str:
+    """Fetch a targeted GitHub Actions best-practices reference.
 
-    Combines:
-    1. Live action versions from GitHub API
-    2. Official starter workflow examples
-    3. Curated syntax reference
+    Analyzes the pipeline content to detect relevant topics, then builds a
+    focused reference with only the sections that matter. Always includes
+    core topics (triggers, permissions, concurrency, secrets/vars, expressions).
 
-    Returns a formatted string ready to inject into agent system prompts.
+    Args:
+        pipeline_content: Source pipeline YAML to analyze for topic detection.
+                          If empty, returns only core topics + action versions.
     """
-    cached = _get_cached("best_practices")
+    # Detect which topics matter for this pipeline
+    detected = detect_topics(pipeline_content) if pipeline_content else set()
+    all_topics = _CORE_TOPICS | detected
+
+    # Determine which actions to look up (core + detected)
+    actions_to_fetch: dict[str, str] = {
+        "actions/checkout": TRACKED_ACTIONS["actions/checkout"],
+    }
+    for topic_key in detected:
+        topic_info = _TOPICS.get(topic_key, {})
+        for action in topic_info.get("actions", []):
+            if action in TRACKED_ACTIONS:
+                actions_to_fetch[action] = TRACKED_ACTIONS[action]
+
+    # Build cache key from the topic set
+    cache_key = "bp:" + ",".join(sorted(all_topics))
+    cached = _get_cached(cache_key)
     if cached is not None:
         return cached
 
-    # Fetch live data concurrently
-    versions, starters = await asyncio.gather(
-        fetch_action_versions(),
-        fetch_starter_workflows(),
-        return_exceptions=True,
-    )
+    # Fetch live action versions (only for relevant actions)
+    versions = dict(actions_to_fetch)
+    try:
+        async with httpx.AsyncClient(
+            timeout=_REQUEST_TIMEOUT,
+            follow_redirects=True,
+            headers={"Accept": "application/vnd.github+json"},
+        ) as client:
+            results = await asyncio.gather(
+                *(
+                    _fetch_latest_version(client, action, fallback)
+                    for action, fallback in actions_to_fetch.items()
+                ),
+                return_exceptions=True,
+            )
+            for result in results:
+                if isinstance(result, tuple):
+                    action, version = result
+                    versions[action] = version
+    except Exception as e:
+        logger.warning("Failed to fetch action versions: %s", e)
 
-    if isinstance(versions, Exception):
-        logger.warning("Action versions fetch failed: %s", versions)
-        versions = dict(TRACKED_ACTIONS)
-    if isinstance(starters, Exception):
-        logger.warning("Starter workflows fetch failed: %s", starters)
-        starters = {}
+    # Fetch one relevant starter workflow example (if topic matches)
+    starter_content = ""
+    for topic_key in detected:
+        topic_info = _TOPICS.get(topic_key, {})
+        starter_key = topic_info.get("starter")
+        if starter_key and starter_key in _STARTER_WORKFLOWS:
+            name, path = _STARTER_WORKFLOWS[starter_key]
+            try:
+                async with httpx.AsyncClient(
+                    timeout=_REQUEST_TIMEOUT, follow_redirects=True
+                ) as client:
+                    resp = await client.get(f"{_STARTER_BASE}/{path}")
+                    if resp.status_code == 200:
+                        starter_content = f"\n## Official Starter Workflow: {name}\n```yaml\n{resp.text.strip()}\n```\n"
+                        break
+            except Exception:
+                pass
 
     # Build the reference document
     parts: list[str] = []
-
-    parts.append("# Official GitHub Actions Reference (auto-fetched)\n")
+    parts.append("# GitHub Actions Reference (auto-fetched, topic-aware)\n")
 
     # Action versions table
-    parts.append("## Latest Official Action Versions\n")
-    parts.append("Always use these versions when generating workflows:\n")
+    parts.append("## Action Versions (use these exact versions)\n")
     parts.append("| Action | Version |")
     parts.append("|--------|---------|")
     for action, version in sorted(versions.items()):
         parts.append(f"| `{action}` | `@{version}` |")
     parts.append("")
 
-    # Syntax reference
-    parts.append(_SYNTAX_REFERENCE)
+    # Topic-specific docs sections
+    for topic_key in sorted(all_topics):
+        section = _DOCS_SECTIONS.get(topic_key)
+        if section:
+            parts.append(section)
+            parts.append("")
 
-    # Starter workflow examples
-    if starters:
-        parts.append("\n## Official Starter Workflow Examples\n")
-        parts.append("These are real, GitHub-maintained workflow templates:\n")
-        for name, content in starters.items():
-            parts.append(f"### {name}")
-            parts.append(f"```yaml\n{content.strip()}\n```\n")
+    if starter_content:
+        parts.append(starter_content)
+
+    topics_str = ", ".join(sorted(detected)) if detected else "none"
+    parts.append(f"\n<!-- detected topics: {topics_str} -->")
 
     result = "\n".join(parts)
-    _set_cached("best_practices", result)
+    _set_cached(cache_key, result)
+    logger.info("Built best-practices reference: %d chars, topics: %s", len(result), topics_str)
     return result

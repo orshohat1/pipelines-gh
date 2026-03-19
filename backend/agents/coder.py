@@ -35,7 +35,7 @@ _docs_context: str = ""
 
 
 def set_docs_context(ctx: str) -> None:
-    """Set the GitHub Actions best-practices reference for all agents."""
+    """Set the GitHub Actions best-practices reference for generator agents."""
     global _docs_context
     _docs_context = ctx
 
@@ -415,7 +415,7 @@ async def _evaluate_yaml(
     model = byok.model_name if byok else "openai/gpt-5.4-mini"
     session_opts: dict = {
         "model": model,
-        "system_message": {"mode": "append", "content": _system(EVALUATOR_SYSTEM)},
+        "system_message": {"mode": "append", "content": EVALUATOR_SYSTEM},
         "on_permission_request": PermissionHandler.approve_all,
         "config_dir": _CONFIG_DIR,
     }
@@ -512,7 +512,7 @@ async def _refine_yaml(
     model = byok.model_name if byok else "claude-sonnet-4.6"
     session_opts: dict = {
         "model": model,
-        "system_message": {"mode": "append", "content": _system(REFINER_SYSTEM)},
+        "system_message": {"mode": "append", "content": REFINER_SYSTEM},
         "on_permission_request": PermissionHandler.approve_all,
         "config_dir": _CONFIG_DIR,
     }

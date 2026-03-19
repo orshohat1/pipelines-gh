@@ -100,6 +100,20 @@ async def _process_single_file(
     await emit(Stage.VALIDATING, "Detecting pipeline type...")
     await emit_agent("validator", "running", "Detecting pipeline type...")
 
+    # Fetch topic-aware best practices in parallel with validation
+    async def _fetch_docs() -> str:
+        try:
+            docs = await fetch_best_practices(content)
+            set_coder_docs(docs)
+            set_planner_docs(docs)
+            logger.info("Loaded best-practices reference (%d chars) for %s", len(docs), filename)
+            return docs
+        except Exception as e:
+            logger.warning("Could not fetch best-practices docs for %s: %s", filename, e)
+            return ""
+
+    docs_task = asyncio.create_task(_fetch_docs())
+
     try:
         validation = await validate_pipeline(client, filename, content, byok)
     except Exception as e:
@@ -134,6 +148,9 @@ async def _process_single_file(
     )
 
     # ── Template detection ───────────────────────────────────────────────
+    # Ensure docs are loaded before planner runs
+    await docs_task
+
     template_refs = detect_template_refs(content, validation.pipeline_type)
     template_contents: list[dict[str, str]] = []
 
@@ -359,15 +376,6 @@ async def run_migration(
     """
     client = CopilotClient({"cwd": tempfile.mkdtemp(prefix="copilot-")})
     await client.start()
-
-    # Fetch latest GitHub Actions best practices and inject into agents
-    try:
-        docs = await fetch_best_practices()
-        set_coder_docs(docs)
-        set_planner_docs(docs)
-        logger.info("Loaded GitHub Actions best-practices reference (%d chars)", len(docs))
-    except Exception as e:
-        logger.warning("Could not fetch best-practices docs: %s", e)
 
     semaphore = asyncio.Semaphore(settings.max_concurrent_pipelines)
 
